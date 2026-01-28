@@ -7,6 +7,8 @@ import { QueueModule } from './queue/queue.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
+import {SandBoxModule} from './sandbox/sandbox.module';
+
 import { AuthModule } from './modules/auth/auth.module';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { IngestionModule } from './modules/ingestion/ingestion.module';
@@ -25,7 +27,7 @@ import { ArtifactsModule } from './modules/artifacts/artifacts.module';
 
     PrismaModule,        // ✅ load Prisma globally
     QueueModule,     // queue registry
-
+    SandBoxModule,
     AuthModule,
     ProjectsModule,
     IngestionModule,
