@@ -1,5 +1,5 @@
 import TeamCard from "./TeamCard";
-export default function TeamSection() {
+export default function TeamSection(){
   return (
     <section className="relative px-8 py-20 overflow-hidden bg-[#B3BAC9]"> 
       <div className="relative z-10 bg-[#E6E6E6] rounded-2xl shadow-[0px_4px_4px_rgba(46,94,195,1)] p-8 mx-auto max-w-[1432px]">
