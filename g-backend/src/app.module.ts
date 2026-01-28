@@ -8,7 +8,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
 import {SandBoxModule} from './sandbox/sandbox.module';
-
+import {StorageModule} from './storage/storage.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { IngestionModule } from './modules/ingestion/ingestion.module';
@@ -25,9 +25,10 @@ import { ArtifactsModule } from './modules/artifacts/artifacts.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
 
-    PrismaModule,        // ✅ load Prisma globally
+    PrismaModule,   // ✅ load Prisma globally
     QueueModule,     // queue registry
     SandBoxModule,
+    StorageModule,
     AuthModule,
     ProjectsModule,
     IngestionModule,
