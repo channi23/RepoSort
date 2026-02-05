@@ -14,6 +14,7 @@ export class TestWorker implements OnModuleInit,OnModuleDestroy{
         this.worker = new Worker(
             QUEUE_NAMES.TEST,
             async (job:Job)=>{
+                const traceId = (job.data as any)?.traceId ?? 'no-trace';
                 this.logger.log(`Picked job id=${job.id} name=${job.name}`);
                 this.logger.log(`Job data: ${JSON.stringify(job.data)} `);
 
@@ -23,10 +24,12 @@ export class TestWorker implements OnModuleInit,OnModuleDestroy{
                 connection: {host: 'localhost',port: 6379},
             },
         );
-        this.worker.on('completed',(job)=>{
+        this.worker.on('completed',(job:Job)=>{
+            const traceId = (job.returnvalue as any)?.traceId ??(job.data as any)?.traceId ?? 'no-trace';
             this.logger.log(`Completed job id=${job.id} name=${job.name}`);
         });
-        this.worker.on('failed',(job,err)=>{
+        this.worker.on('failed',(job:Job,err)=>{
+            const traceId = (job.returnvalue as any)?.traceId ??(job.data as any)?.traceId?? 'no-trace';
             this.logger.log(`Failed job id=${job?.id} name=${job?.name}`,err.stack);
         })
 

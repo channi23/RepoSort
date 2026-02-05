@@ -1,8 +1,11 @@
-import { Module } from '@nestjs/common';
+import { Module,MiddlewareConsumer,NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 
 import { PrismaModule } from './db/db.module';
 import { QueueModule } from './queue/queue.module';
+
+import {TraceMiddleware} from './common/middleware/trace.middleware';
+
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -25,8 +28,8 @@ import { ArtifactsModule } from './modules/artifacts/artifacts.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
 
-    PrismaModule,   // ✅ load Prisma globally
-    QueueModule,     // queue registry
+    PrismaModule,   
+    QueueModule,     
     SandBoxModule,
     StorageModule,
     AuthModule,
@@ -44,4 +47,8 @@ import { ArtifactsModule } from './modules/artifacts/artifacts.module';
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule {
+    configure(consumer:MiddlewareConsumer){
+        consumer.apply(TraceMiddleware).forRoutes('*');
+    }
+}
