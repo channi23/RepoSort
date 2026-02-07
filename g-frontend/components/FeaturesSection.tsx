@@ -7,7 +7,26 @@ import ReactFlow, {
   ReactFlowProvider,
   Node,
   Edge,
+  Handle,
+  Position,
 } from "reactflow";
+
+function ConditionalNode({ id, data }: { id: string; data: any }) {
+  const { getEdges } = useReactFlow();
+
+  const edges = getEdges();
+
+  const hasTarget = edges.some((e) => e.target === id);
+  const hasSource = edges.some((e) => e.source === id);
+
+  return (
+    <div className="bg-white border border-black rounded-lg px-6 py-3 text-sm font-medium">
+      {hasTarget && <Handle type="target" position={Position.Top} />}
+      <span>{data.label}</span>
+      {hasSource && <Handle type="source" position={Position.Bottom} />}
+    </div>
+  );
+}
 import "reactflow/dist/style.css";
 import FeatureCard from "./FeatureCard";
 
@@ -400,6 +419,8 @@ export default function FeaturesSection(){
     label: string;
   } | null>(null);
   const [activeSection, setActiveSection] = useState<string | null>(null);
+  // Scroll state for feature cards
+  const [atTop, setAtTop] = useState(true);
 
   const graph = useMemo<{
     nodes: Node[];
@@ -529,22 +550,39 @@ export default function FeaturesSection(){
           <div className="grid grid-cols-1 lg:grid-cols-[520px_520px] justify-center gap-12">
 
             {/* LEFT: Feature cards */}
-            <div className="h-[420px] overflow-y-auto pr-4 snap-y snap-mandatory space-y-6 scrollbar-hide">
-              <div className="snap-start h-[420px] flex items-center">
-                <FeatureCard title="Visualize Your Code" description="See your entire repository as an interactive system graph." color="#8A38F5"/>
+            <div className="relative">
+              <div
+                className="h-[420px] overflow-y-auto pr-4 snap-y snap-mandatory space-y-6 scrollbar-hide"
+                onScroll={(e) => {
+                  const el = e.currentTarget;
+                  setAtTop(el.scrollTop === 0);
+                }}
+              >
+                <div className="snap-start h-[420px] flex items-center">
+                  <FeatureCard title="Visualize Your Code" description="See your entire repository as an interactive system graph." color="#8A38F5"/>
+                </div>
+                <div className="snap-start h-[420px] flex items-center">
+                  <FeatureCard title="Find Hidden Risks" description="Automatically detect architectural and security issues." color="#F03E3F"/>
+                </div>
+                <div className="snap-start h-[420px] flex items-center">
+                  <FeatureCard title="Plan Fixes Safely" description="Turn intent into clear, approval-ready repair plans." color="#375922"/>
+                </div>
+                <div className="snap-start h-[420px] flex items-center">
+                  <FeatureCard title="Apply & Verify" description="Fix code in a sandbox and re-check for risks." color="#736C2E"/>
+                </div>
+                <div className="snap-start h-[420px] flex items-center">
+                  <FeatureCard title="Explain the Changes" description="View diffs, graphs, and clear impact summaries." color="#2D4C8F"/>
+                </div>
               </div>
-              <div className="snap-start h-[420px] flex items-center">
-                <FeatureCard title="Find Hidden Risks" description="Automatically detect architectural and security issues." color="#F03E3F"/>
-              </div>
-              <div className="snap-start h-[420px] flex items-center">
-                <FeatureCard title="Plan Fixes Safely" description="Turn intent into clear, approval-ready repair plans." color="#375922"/>
-              </div>
-              <div className="snap-start h-[420px] flex items-center">
-                <FeatureCard title="Apply & Verify" description="Fix code in a sandbox and re-check for risks." color="#736C2E"/>
-              </div>
-              <div className="snap-start h-[420px] flex items-center">
-                <FeatureCard title="Explain the Changes" description="View diffs, graphs, and clear impact summaries." color="#2D4C8F"/>
-              </div>
+              {/* Subtle scroll hint */}
+              {atTop && (
+                <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-[#D9D9D9] to-transparent flex items-end justify-center pb-2">
+                  <div className="flex flex-col items-center text-black/60 text-[13px] tracking-wide font-medium">
+                    <span>What We Offer</span>
+                    <span className="text-base leading-none">↓</span>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* RIGHT: Node graph preview (interactive mock) */}
@@ -564,6 +602,7 @@ export default function FeaturesSection(){
                   nodes={graph.nodes}
                   edges={graph.edges}
                   fitView
+                  nodeTypes={{ default: ConditionalNode }}
                   onNodeClick={(event, node) => {
                     event.stopPropagation();
                     // Drill-down navigation
@@ -810,6 +849,14 @@ export default function FeaturesSection(){
         }
         .scrollbar-hide::-webkit-scrollbar {
           display: none; /* Chrome, Safari, Opera */
+        }
+        :global(.react-flow__node-default) {
+          background: transparent;
+          border: none;
+          box-shadow: none;
+        }
+        :global(.react-flow__node) {
+          padding: 0;
         }
       `}</style>
     </section>
