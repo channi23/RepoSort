@@ -1,3 +1,4 @@
+import { AuthProvider } from "@/components/AuthProvider"; // Import the provider
 import "./globals.css";
 import {
   Epilogue,
@@ -54,7 +55,10 @@ export default function RootLayout({
           antialiased
         `}
       >
-        {children}
+        {/* Wrap children with AuthProvider to share login state globally */}
+        <AuthProvider>
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );
