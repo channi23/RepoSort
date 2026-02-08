@@ -26,6 +26,7 @@ model Project {
   runs Run[]
   verifications VerificationReport[]
   diffReports DiffReport[]
+  NodeAction     NodeAction[]
 }
 
 model RepoSnapshot {
@@ -303,4 +304,40 @@ model DiffReport {
 
   run                  Run      @relation(fields: [runId], references: [id])
   project              Project  @relation(fields: [projectId], references: [id])
+}
+enum NodeActionType {
+  REFACTOR
+  HARDEN
+  ADD_TESTS
+}
+
+enum NodeActionStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model NodeAction {
+  id             String           @id @default(uuid())
+  type           NodeActionType
+  status         NodeActionStatus @default(QUEUED)
+
+  projectId      String
+  graphSnapshotId String
+  repoSnapshotId  String
+
+  planId         String?
+  runId          String?
+
+  prompt         String
+  selectedNodeIds Json
+
+  error          String?
+  traceId        String?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project       Project @relation(fields: [projectId], references: [id])
 }

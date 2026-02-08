@@ -30,6 +30,15 @@ export class DiffRunWorker implements OnModuleInit, OnModuleDestroy {
         const run = await this.prisma.run.findUnique({ where: { id: runId } });
         if (!run) throw new Error(`Run not found: ${runId}`);
 
+        const existingDiff = await this.prisma.diffReport.findUnique({
+          where: { runId },
+          select: { id: true, reportPath: true },
+        });
+        if (existingDiff) {
+          this.logger.log(`[traceId=${traceId}] diff skip run=${runId} reason=report-exists`);
+          return { ok: true, runId, reportPath: existingDiff.reportPath, skipped: true };
+        }
+
         const verification = await this.prisma.verificationReport.findUnique({ where: { runId } });
         if (!verification) throw new Error(`VerificationReport not found for run=${runId} (Stage 6 required)`);
 
@@ -170,12 +179,51 @@ export class DiffRunWorker implements OnModuleInit, OnModuleDestroy {
           `[traceId=${traceId}] diff done run=${runId} nodes(+${nodesAdded.length}/-${nodesRemoved.length}) edges(+${edgesAdded.length}/-${edgesRemoved.length}) riskDelta=${riskDelta}`,
         );
 
+        // Stage 8 chaining: finalize NodeAction for this run (if one exists)
+        try {
+          const updated = await this.prisma.nodeAction.updateMany({
+            where: { runId },
+            data: { status: 'SUCCEEDED', error: null },
+          });
+          if (updated.count > 0) {
+            this.logger.log(`[traceId=${traceId}] nodeAction finalized run=${runId} status=SUCCEEDED`);
+          }
+        } catch (e: any) {
+          // Don't fail the diff if node actions aren't being used in this run
+          this.logger.warn(
+            `[traceId=${traceId}] nodeAction finalize skipped run=${runId}: ${e?.message ?? e}`,
+          );
+        }
+
         return { ok: true, runId, reportPath };
       },
       { connection: { host: 'localhost', port: 6379 } },
     );
 
     this.logger.log(`DiffRunWorker listening on queue: ${QUEUE_NAMES.DIFF_RUN}`);
+
+    this.worker.on('failed', async (job, err) => {
+      const runId = (job?.data as any)?.runId;
+      const traceId = (job?.data as any)?.traceId;
+
+      this.logger.error(
+        `[traceId=${traceId}] DIFF_RUN failed jobId=${job?.id} run=${runId}`,
+        err.stack,
+      );
+
+      if (!runId) return;
+
+      try {
+        await this.prisma.nodeAction.updateMany({
+          where: { runId },
+          data: { status: 'FAILED', error: err?.message ?? String(err) },
+        });
+      } catch (e: any) {
+        this.logger.warn(
+          `[traceId=${traceId}] nodeAction fail-update skipped run=${runId}: ${e?.message ?? e}`,
+        );
+      }
+    });
   }
 
   async onModuleDestroy() {

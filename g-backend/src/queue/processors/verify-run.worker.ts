@@ -1,13 +1,15 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { Worker, Job } from 'bullmq';
 import { PrismaService } from '../../db/prisma.service';
 import { QUEUE_NAMES } from '../queues/queue.names';
+import { QUEUE_REGISTRY } from '../../queue/queue.tokens';
 import { StorageService } from '../../storage/storage.service';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 
-// ✅ Import Prisma enums so TS matches your schema types
+// Import Prisma enums so TS matches your schema types
 import { NodeType, EdgeType, RiskType, RiskSeverity } from '@prisma/client';
 
 type VerifyJob = { runId: string; traceId?: string };
@@ -20,9 +22,14 @@ export class VerifyRunWorker implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   async onModuleInit() {
+    const queues = this.moduleRef.get(QUEUE_REGISTRY, { strict: false });
+    if (!queues?.diff) {
+      throw new Error('QUEUE_REGISTRY.diff is not available. Ensure QueueModule provides { diff: makeQueue(QUEUE_NAMES.DIFF_RUN) }.');
+    }
     this.worker = new Worker(
       QUEUE_NAMES.VERIFY_RUN,
       async (job: Job<VerifyJob>) => {
@@ -241,6 +248,21 @@ export class VerifyRunWorker implements OnModuleInit, OnModuleDestroy {
             reportPath,
           },
         });
+
+        const existingDiff = await this.prisma.diffReport.findUnique({
+          where: { runId },
+          select: { id: true },
+        });
+        if (existingDiff) {
+          this.logger.log(`[traceId=${traceId}] DIFF_RUN enqueue skipped run=${runId} reason=report-exists`);
+          this.logger.log(
+            `[traceId=${traceId}] verify done run=${runId} graph=${graph.id} risks=${residualRiskCount} confidence=${confidence}`,
+          );
+          return { ok: true, runId, graphSnapshotId: graph.id, residualRiskCount, confidence, skippedDiff: true };
+        }
+
+        const diffJob = await queues.diff.add(QUEUE_NAMES.DIFF_RUN, { runId, traceId });
+        this.logger.log(`[traceId=${traceId}] DIFF_RUN auto-enqueued jobId=${diffJob.id} run=${runId}`);
 
         this.logger.log(
           `[traceId=${traceId}] verify done run=${runId} graph=${graph.id} risks=${residualRiskCount} confidence=${confidence}`,

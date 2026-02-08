@@ -27,6 +27,8 @@
     "@prisma/adapter-pg": "^7.3.0",
     "@prisma/client": "^7.2.0",
     "bullmq": "^5.66.5",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.3",
     "execa": "^9.6.1",
     "ioredis": "^5.9.2",
     "pg": "^8.17.2",
