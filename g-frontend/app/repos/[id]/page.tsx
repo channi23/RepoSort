@@ -1,6 +1,6 @@
 "use client";
 import Navbar from "@/components/AuthNavbar";
-import { useState, use, useEffect } from "react";
+import { useState, use, useEffect, useRef } from "react";
 import ReactFlow, { Background, Controls } from "reactflow";
 import "reactflow/dist/style.css";
 export default function RepoSortingPage({
@@ -24,6 +24,12 @@ export default function RepoSortingPage({
   const [future, setFuture] = useState<any[]>([]);
   const [isBatching, setIsBatching] = useState(false);
 
+  // Refs to track current state for pushHistory (avoid stale closures)
+  const nodesRef = useRef<any[]>([]);
+  const edgesRef = useRef<any[]>([]);
+  const expandedRef = useRef<Record<string, boolean>>({});
+  const nodeMetaRef = useRef<Record<string, { label: string; description: string }>>({});
+
   // Helper to push snapshot to history
   const pushHistory = () => {
     if (isBatching) return;
@@ -31,10 +37,10 @@ export default function RepoSortingPage({
     setHistory((prev) => [
       ...prev,
       {
-        nodes: JSON.parse(JSON.stringify(nodes)),
-        edges: JSON.parse(JSON.stringify(edges)),
-        expanded: JSON.parse(JSON.stringify(expanded)),
-        nodeMeta: JSON.parse(JSON.stringify(nodeMeta)),
+        nodes: JSON.parse(JSON.stringify(nodesRef.current)),
+        edges: JSON.parse(JSON.stringify(edgesRef.current)),
+        expanded: JSON.parse(JSON.stringify(expandedRef.current)),
+        nodeMeta: JSON.parse(JSON.stringify(nodeMetaRef.current)),
       },
     ]);
     setFuture([]);
@@ -44,10 +50,10 @@ export default function RepoSortingPage({
     setHistory((prev) => [
       ...prev,
       {
-        nodes: JSON.parse(JSON.stringify(nodes)),
-        edges: JSON.parse(JSON.stringify(edges)),
-        expanded: JSON.parse(JSON.stringify(expanded)),
-        nodeMeta: JSON.parse(JSON.stringify(nodeMeta)),
+        nodes: JSON.parse(JSON.stringify(nodesRef.current)),
+        edges: JSON.parse(JSON.stringify(edgesRef.current)),
+        expanded: JSON.parse(JSON.stringify(expandedRef.current)),
+        nodeMeta: JSON.parse(JSON.stringify(nodeMetaRef.current)),
       },
     ]);
     setFuture([]);
@@ -132,9 +138,12 @@ export default function RepoSortingPage({
     label?: string,
     parentId?: string,
     offsetX = 0,
-    offsetY = 0
+    offsetY = 0,
+    recordHistory = true
   ) => {
-    pushHistory();
+    if (recordHistory) {
+      pushHistory();
+    }
     setNodes((prev) => {
       if (prev.find((n) => n.id === id)) return prev;
 
@@ -143,14 +152,37 @@ export default function RepoSortingPage({
         ? { x: parent.position.x + offsetX, y: parent.position.y + offsetY }
         : { x: 120 + prev.length * 180, y: 220 };
 
-      return [...prev, { id, data: { label: label ?? id }, position }];
+      const newNodes = [...prev, { id, data: { label: label ?? id }, position }];
+      nodesRef.current = newNodes;
+      return newNodes;
     });
 
-    setNodeMeta((prev) => ({
-      ...prev,
-      [id]: { label: label ?? id, description: "" },
-    }));
+    setNodeMeta((prev) => {
+      const newMeta = {
+        ...prev,
+        [id]: { label: label ?? id, description: "" },
+      };
+      nodeMetaRef.current = newMeta;
+      return newMeta;
+    });
   };
+
+  // Sync refs whenever state changes
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
+  useEffect(() => {
+    edgesRef.current = edges;
+  }, [edges]);
+
+  useEffect(() => {
+    expandedRef.current = expanded;
+  }, [expanded]);
+
+  useEffect(() => {
+    nodeMetaRef.current = nodeMeta;
+  }, [nodeMeta]);
 
   useEffect(() => {
     setNodes((prev) =>
@@ -179,47 +211,70 @@ export default function RepoSortingPage({
         child.label,
         parentId,
         -120 + index * 200,
-        140
+        140,
+        false
       );
-      connectNodes(parentId, child.id);
+      connectNodes(parentId, child.id, false);
     });
   };
 
   const collapseSubgraph = (parentId: string) => {
     pushHistory();
-    const children = SUBGRAPHS[parentId];
-    if (!children) return;
+    const idsToRemove = new Set(collectSubtreeIds(parentId));
+    idsToRemove.delete(parentId); // Keep the parent itself
 
-    setNodes((prev) =>
-      prev.filter(
-        (n) => n.id === parentId || !children.some((c) => c.id === n.id)
-      )
-    );
+    setNodes((prev) => {
+      const newNodes = prev.filter((n) => !idsToRemove.has(n.id));
+      nodesRef.current = newNodes;
+      return newNodes;
+    });
 
-    setEdges((prev) =>
-      prev.filter(
-        (e) =>
-          e.source !== parentId &&
-          !children.some((c) => c.id === e.target)
-      )
-    );
+    setEdges((prev) => {
+      const newEdges = prev.filter(
+        (e) => !idsToRemove.has(e.source) && !idsToRemove.has(e.target)
+      );
+      edgesRef.current = newEdges;
+      return newEdges;
+    });
+
+    setExpanded((prev) => {
+      const next = { ...prev };
+      idsToRemove.forEach((id) => delete next[id]);
+      expandedRef.current = next;
+      return next;
+    });
+
+    setNodeMeta((prev) => {
+      const next = { ...prev };
+      idsToRemove.forEach((id) => delete next[id]);
+      nodeMetaRef.current = next;
+      return next;
+    });
   };
 
-  const connectNodes = (from: string, to: string) => {
-    pushHistory();
-    setEdges((prev) => [
-      ...prev,
-      { id: `${from}-${to}-${Date.now()}`, source: from, target: to },
-    ]);
+  const connectNodes = (from: string, to: string, recordHistory = true) => {
+    if (recordHistory) {
+      pushHistory();
+    }
+    setEdges((prev) => {
+      const newEdges = [
+        ...prev,
+        { id: `${from}-${to}-${Date.now()}`, source: from, target: to },
+      ];
+      edgesRef.current = newEdges;
+      return newEdges;
+    });
   };
 
   const renameNode = (id: string, newLabel: string) => {
     pushHistory();
-    setNodeMeta((prev) =>
-      prev[id]
+    setNodeMeta((prev) => {
+      const next = prev[id]
         ? { ...prev, [id]: { ...prev[id], label: newLabel } }
-        : prev
-    );
+        : prev;
+      nodeMetaRef.current = next;
+      return next;
+    });
   };
 
   // Remove a node and its entire subtree, with history, edges, expanded, and meta cleanup.
@@ -228,25 +283,33 @@ export default function RepoSortingPage({
 
     const idsToRemove = collectSubtreeIds(id);
 
-    setNodes((prev) => prev.filter((n) => !idsToRemove.includes(n.id)));
+    setNodes((prev) => {
+      const next = prev.filter((n) => !idsToRemove.includes(n.id));
+      nodesRef.current = next;
+      return next;
+    });
 
-    setEdges((prev) =>
-      prev.filter(
+    setEdges((prev) => {
+      const next = prev.filter(
         (e) =>
           !idsToRemove.includes(e.source) &&
           !idsToRemove.includes(e.target)
-      )
-    );
+      );
+      edgesRef.current = next;
+      return next;
+    });
 
     setExpanded((prev) => {
       const next = { ...prev };
       idsToRemove.forEach((i) => delete next[i]);
+      expandedRef.current = next;
       return next;
     });
 
     setNodeMeta((prev) => {
       const next = { ...prev };
       idsToRemove.forEach((i) => delete next[i]);
+      nodeMetaRef.current = next;
       return next;
     });
 
@@ -259,24 +322,32 @@ export default function RepoSortingPage({
   const undo = () => {
     setHistory((prev) => {
       if (prev.length === 0) return prev;
+      return prev.slice(0, -1);
+    });
+
+    setHistory((prev) => {
+      if (prev.length === 0) return prev;
 
       const last = prev[prev.length - 1];
-      setFuture((f) => [
-        {
-          nodes: JSON.parse(JSON.stringify(nodes)),
-          edges: JSON.parse(JSON.stringify(edges)),
-          expanded: JSON.parse(JSON.stringify(expanded)),
-          nodeMeta: JSON.parse(JSON.stringify(nodeMeta)),
-        },
-        ...f,
-      ]);
+      const futureEntry = {
+        nodes: JSON.parse(JSON.stringify(nodesRef.current)),
+        edges: JSON.parse(JSON.stringify(edgesRef.current)),
+        expanded: JSON.parse(JSON.stringify(expandedRef.current)),
+        nodeMeta: JSON.parse(JSON.stringify(nodeMetaRef.current)),
+      };
 
+      setFuture((f) => [futureEntry, ...f]);
       setNodes(last.nodes);
       setEdges(last.edges);
       setExpanded(last.expanded);
       setNodeMeta(last.nodeMeta);
 
-      return prev.slice(0, -1);
+      nodesRef.current = last.nodes;
+      edgesRef.current = last.edges;
+      expandedRef.current = last.expanded;
+      nodeMetaRef.current = last.nodeMeta;
+
+      return prev;
     });
   };
 
@@ -285,20 +356,24 @@ export default function RepoSortingPage({
       if (prev.length === 0) return prev;
 
       const next = prev[0];
-      setHistory((h) => [
-        ...h,
-        {
-          nodes: JSON.parse(JSON.stringify(nodes)),
-          edges: JSON.parse(JSON.stringify(edges)),
-          expanded: JSON.parse(JSON.stringify(expanded)),
-          nodeMeta: JSON.parse(JSON.stringify(nodeMeta)),
-        },
-      ]);
+      const historyEntry = {
+        nodes: JSON.parse(JSON.stringify(nodesRef.current)),
+        edges: JSON.parse(JSON.stringify(edgesRef.current)),
+        expanded: JSON.parse(JSON.stringify(expandedRef.current)),
+        nodeMeta: JSON.parse(JSON.stringify(nodeMetaRef.current)),
+      };
+
+      setHistory((h) => [...h, historyEntry]);
 
       setNodes(next.nodes);
       setEdges(next.edges);
       setExpanded(next.expanded);
       setNodeMeta(next.nodeMeta);
+
+      nodesRef.current = next.nodes;
+      edgesRef.current = next.edges;
+      expandedRef.current = next.expanded;
+      nodeMetaRef.current = next.nodeMeta;
 
       return prev.slice(1);
     });
@@ -323,7 +398,7 @@ export default function RepoSortingPage({
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [nodes, edges, expanded, nodeMeta]);
+  }, []);
 
   const runAgentCommand = (input: string) => {
     const text = input.toLowerCase().trim();
@@ -425,15 +500,23 @@ export default function RepoSortingPage({
         connectNodes(action.from, action.to);
         break;
       case "expand":
-        if (SUBGRAPHS[action.id] && !expanded[action.id]) {
+        if (SUBGRAPHS[action.id] && !expandedRef.current[action.id]) {
           expandSubgraph(action.id);
-          toggleExpand(action.id);
+          setExpanded((prev) => {
+            const next = { ...prev, [action.id]: true };
+            expandedRef.current = next;
+            return next;
+          });
         }
         break;
       case "collapse":
-        if (SUBGRAPHS[action.id] && expanded[action.id]) {
+        if (SUBGRAPHS[action.id] && expandedRef.current[action.id]) {
           collapseSubgraph(action.id);
-          toggleExpand(action.id);
+          setExpanded((prev) => {
+            const next = { ...prev, [action.id]: false };
+            expandedRef.current = next;
+            return next;
+          });
         }
         break;
       case "rename":
@@ -580,6 +663,7 @@ export default function RepoSortingPage({
                     },
                   }))
                 }
+                onBlur={() => pushHistory()}
                 className="w-full border rounded px-2 py-1 text-sm"
               />
             </div>
@@ -597,6 +681,7 @@ export default function RepoSortingPage({
                     },
                   }))
                 }
+                onBlur={() => pushHistory()}
                 rows={3}
                 className="w-full border rounded px-2 py-1 text-sm resize-none"
               />
