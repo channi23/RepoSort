@@ -1,0 +1,184 @@
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Worker, Job } from 'bullmq';
+import { PrismaService } from '../../db/prisma.service';
+import { StorageService } from '../../storage/storage.service';
+import { QUEUE_NAMES } from '../queues/queue.names';
+import { NodeType, EdgeType } from '@prisma/client';
+
+type DiffJob = { runId: string; traceId?: string };
+
+type NodeKey = string; // `${type}:${path}`
+type EdgeKey = string; // `${type}:${fromPath}->${toPath}`
+
+@Injectable()
+export class DiffRunWorker implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(DiffRunWorker.name);
+  private worker!: Worker;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
+
+  async onModuleInit() {
+    this.worker = new Worker(
+      QUEUE_NAMES.DIFF_RUN,
+      async (job: Job<DiffJob>) => {
+        const { runId, traceId } = job.data;
+        this.logger.log(`[traceId=${traceId}] diff start run=${runId}`);
+
+        const run = await this.prisma.run.findUnique({ where: { id: runId } });
+        if (!run) throw new Error(`Run not found: ${runId}`);
+
+        const verification = await this.prisma.verificationReport.findUnique({ where: { runId } });
+        if (!verification) throw new Error(`VerificationReport not found for run=${runId} (Stage 6 required)`);
+
+        // BEFORE graph: latest graph snapshot for this repoSnapshot
+        const beforeGraph = await this.prisma.graphSnapshot.findFirst({
+          where: { repoSnapshotId: run.repoSnapshotId, projectId: run.projectId },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (!beforeGraph) throw new Error(`Before GraphSnapshot not found for repoSnapshot=${run.repoSnapshotId}`);
+
+        // AFTER graph: from verification report
+        const afterGraph = await this.prisma.graphSnapshot.findUnique({
+          where: { id: verification.graphSnapshotId },
+        });
+        if (!afterGraph) throw new Error(`After GraphSnapshot not found id=${verification.graphSnapshotId}`);
+
+        const [beforeNodes, afterNodes, beforeEdges, afterEdges] = await Promise.all([
+          this.prisma.node.findMany({ where: { graphSnapshotId: beforeGraph.id } }),
+          this.prisma.node.findMany({ where: { graphSnapshotId: afterGraph.id } }),
+          this.prisma.edge.findMany({ where: { graphSnapshotId: beforeGraph.id } }),
+          this.prisma.edge.findMany({ where: { graphSnapshotId: afterGraph.id } }),
+        ]);
+
+        // Map nodeId -> path for each graph (edge translation)
+        const beforeIdToPath = new Map<string, string>();
+        for (const n of beforeNodes) beforeIdToPath.set(n.id, n.path ?? n.label);
+
+        const afterIdToPath = new Map<string, string>();
+        for (const n of afterNodes) afterIdToPath.set(n.id, n.path ?? n.label);
+
+        const nodeKey = (type: NodeType, p?: string | null, label?: string) =>
+          `${type}:${(p ?? label ?? '').trim()}`;
+
+        const beforeNodeSet = new Set<NodeKey>(beforeNodes.map(n => nodeKey(n.type, n.path, n.label)));
+        const afterNodeSet = new Set<NodeKey>(afterNodes.map(n => nodeKey(n.type, n.path, n.label)));
+
+        const nodesAdded = [...afterNodeSet].filter(k => !beforeNodeSet.has(k));
+        const nodesRemoved = [...beforeNodeSet].filter(k => !afterNodeSet.has(k));
+
+        const edgeKey = (type: EdgeType, fromPath: string, toPath: string) =>
+          `${type}:${fromPath}->${toPath}`;
+
+        const beforeEdgeSet = new Set<EdgeKey>(
+          beforeEdges.map(e => edgeKey(
+            e.type,
+            beforeIdToPath.get(e.fromNodeId) ?? e.fromNodeId,
+            beforeIdToPath.get(e.toNodeId) ?? e.toNodeId,
+          )),
+        );
+
+        const afterEdgeSet = new Set<EdgeKey>(
+          afterEdges.map(e => edgeKey(
+            e.type,
+            afterIdToPath.get(e.fromNodeId) ?? e.fromNodeId,
+            afterIdToPath.get(e.toNodeId) ?? e.toNodeId,
+          )),
+        );
+
+        const edgesAdded = [...afterEdgeSet].filter(k => !beforeEdgeSet.has(k));
+        const edgesRemoved = [...beforeEdgeSet].filter(k => !afterEdgeSet.has(k));
+
+        const [beforeRiskCount, afterRiskCount] = await Promise.all([
+          this.prisma.risk.count({ where: { projectId: run.projectId, graphSnapshotId: beforeGraph.id } }),
+          this.prisma.risk.count({ where: { projectId: run.projectId, graphSnapshotId: afterGraph.id } }),
+        ]);
+
+        const riskDelta = afterRiskCount - beforeRiskCount;
+
+        const report = {
+          runId,
+          projectId: run.projectId,
+          before: {
+            graphSnapshotId: beforeGraph.id,
+            nodeCount: beforeNodes.length,
+            edgeCount: beforeEdges.length,
+            riskCount: beforeRiskCount,
+          },
+          after: {
+            graphSnapshotId: afterGraph.id,
+            nodeCount: afterNodes.length,
+            edgeCount: afterEdges.length,
+            riskCount: afterRiskCount,
+          },
+          deltas: {
+            nodesAddedCount: nodesAdded.length,
+            nodesRemovedCount: nodesRemoved.length,
+            edgesAddedCount: edgesAdded.length,
+            edgesRemovedCount: edgesRemoved.length,
+            riskDelta,
+          },
+          samples: {
+            nodesAdded: nodesAdded.slice(0, 25),
+            nodesRemoved: nodesRemoved.slice(0, 25),
+            edgesAdded: edgesAdded.slice(0, 25),
+            edgesRemoved: edgesRemoved.slice(0, 25),
+          },
+          generatedAt: new Date().toISOString(),
+        };
+
+        const reportPath = this.storage.writeJson(
+          run.projectId,
+          run.id,
+          'diff/semantic-diff.json',
+          report,
+        );
+
+        await this.prisma.diffReport.upsert({
+          where: { runId },
+          create: {
+            runId,
+            projectId: run.projectId,
+            beforeGraphSnapshotId: beforeGraph.id,
+            afterGraphSnapshotId: afterGraph.id,
+            nodesAddedCount: nodesAdded.length,
+            nodesRemovedCount: nodesRemoved.length,
+            edgesAddedCount: edgesAdded.length,
+            edgesRemovedCount: edgesRemoved.length,
+            beforeRiskCount,
+            afterRiskCount,
+            riskDelta,
+            reportPath,
+          },
+          update: {
+            beforeGraphSnapshotId: beforeGraph.id,
+            afterGraphSnapshotId: afterGraph.id,
+            nodesAddedCount: nodesAdded.length,
+            nodesRemovedCount: nodesRemoved.length,
+            edgesAddedCount: edgesAdded.length,
+            edgesRemovedCount: edgesRemoved.length,
+            beforeRiskCount,
+            afterRiskCount,
+            riskDelta,
+            reportPath,
+          },
+        });
+
+        this.logger.log(
+          `[traceId=${traceId}] diff done run=${runId} nodes(+${nodesAdded.length}/-${nodesRemoved.length}) edges(+${edgesAdded.length}/-${edgesRemoved.length}) riskDelta=${riskDelta}`,
+        );
+
+        return { ok: true, runId, reportPath };
+      },
+      { connection: { host: 'localhost', port: 6379 } },
+    );
+
+    this.logger.log(`DiffRunWorker listening on queue: ${QUEUE_NAMES.DIFF_RUN}`);
+  }
+
+  async onModuleDestroy() {
+    if (this.worker) await this.worker.close();
+  }
+}

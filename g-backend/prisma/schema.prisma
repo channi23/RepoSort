@@ -24,6 +24,8 @@ model Project {
   risks          Risk[]
   plans Plan[]
   runs Run[]
+  verifications VerificationReport[]
+  diffReports DiffReport[]
 }
 
 model RepoSnapshot {
@@ -67,6 +69,7 @@ model GraphSnapshot {
   edges Edge[]
   risks Risk[]
   plans Plan[]
+  verifications   VerificationReport[]
 }
 
 /**
@@ -246,6 +249,9 @@ model Run {
   @@index([projectId, createdAt])
   @@index([repoSnapshotId])
   @@index([planId])
+  verification VerificationReport?
+  diffReport DiffReport?
+
 }
 
 model Patch {
@@ -255,4 +261,46 @@ model Patch {
   createdAt DateTime @default(now())
 
   run       Run      @relation(fields: [runId], references: [id])
+}
+
+model VerificationReport {
+  id             String   @id @default(uuid())
+  runId          String   @unique
+  projectId      String
+  createdAt      DateTime @default(now())
+
+  graphSnapshotId String
+  confidence     Float
+  residualRiskCount Int
+
+  reportPath     String   // artifacts/.../verification/report.json
+
+  run            Run      @relation(fields: [runId], references: [id])
+  project        Project  @relation(fields: [projectId], references: [id])
+  graphSnapshot  GraphSnapshot @relation(fields: [graphSnapshotId], references: [id])
+
+  @@index([projectId, createdAt])
+}
+model DiffReport {
+  id                   String   @id @default(uuid())
+  runId                String   @unique
+  projectId            String
+  beforeGraphSnapshotId String
+  afterGraphSnapshotId  String
+
+  createdAt            DateTime @default(now())
+
+  nodesAddedCount      Int      @default(0)
+  nodesRemovedCount    Int      @default(0)
+  edgesAddedCount      Int      @default(0)
+  edgesRemovedCount    Int      @default(0)
+
+  beforeRiskCount      Int      @default(0)
+  afterRiskCount       Int      @default(0)
+  riskDelta            Int      @default(0)
+
+  reportPath           String
+
+  run                  Run      @relation(fields: [runId], references: [id])
+  project              Project  @relation(fields: [projectId], references: [id])
 }

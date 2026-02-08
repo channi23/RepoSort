@@ -1,4 +1,7 @@
 import { Module } from '@nestjs/common';
+import {DiffsController} from './diffs.controller';
 
-@Module({})
+@Module({
+    controllers:[DiffsController],
+})
 export class DiffsModule {}

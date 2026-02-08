@@ -12,6 +12,8 @@ import {TestWorker} from './processors/test.worker';
 import {AnalyzeRepoWorker} from './processors/analyze-repo.worker';
 import {CreatePlanWorker} from './processors/create-plan.worker';
 import {ApplyPlanWorker} from './processors/apply-plan.worker';
+import {VerifyRunWorker} from './processors/verify-run.worker';
+import {DiffRunWorker} from './processors/diff-run.worker';
 @Global()
 @Module({
   imports: [ConfigModule,SandboxModule,StorageModule],
@@ -23,6 +25,8 @@ import {ApplyPlanWorker} from './processors/apply-plan.worker';
     AnalyzeRepoWorker,
     CreatePlanWorker,
     ApplyPlanWorker,
+    VerifyRunWorker,
+    DiffRunWorker,
     {
       provide: QUEUE_REGISTRY,
       useFactory: () => {
