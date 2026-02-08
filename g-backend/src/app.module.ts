@@ -10,7 +10,7 @@ import {TraceMiddleware} from './common/middleware/trace.middleware';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
-import {SandBoxModule} from './sandbox/sandbox.module';
+import {SandboxModule} from './sandbox/sandbox.module';
 import {StorageModule} from './storage/storage.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ProjectsModule } from './modules/projects/projects.module';
@@ -30,7 +30,7 @@ import { ArtifactsModule } from './modules/artifacts/artifacts.module';
 
     PrismaModule,   
     QueueModule,     
-    SandBoxModule,
+    SandboxModule,
     StorageModule,
     AuthModule,
     ProjectsModule,

@@ -1,4 +1,7 @@
 import { Module } from '@nestjs/common';
+import {IngestionController} from './ingestion.controller';
 
-@Module({})
+@Module({
+    controllers:[IngestionController],
+})
 export class IngestionModule {}

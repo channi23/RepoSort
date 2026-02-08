@@ -1,18 +1,21 @@
 import { Module, Global } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import {BuildGraphWorker} from './processors/build-graph.worker';
 import { Queue } from 'bullmq';
-
+import {SandboxModule} from '../sandbox/sandbox.module';
 import { QueueTestController } from './queue-test.controller';
 import { QUEUE_NAMES } from './queues/queue.names';
-
+import {IngestWorker} from './processors/ingest.worker';
 import {QUEUE_REGISTRY} from './queue.tokens';
 import {TestWorker} from './processors/test.worker';
 @Global()
 @Module({
-  imports: [ConfigModule],
+  imports: [ConfigModule,SandboxModule],
   controllers: [QueueTestController],
   providers: [
     TestWorker,
+    IngestWorker,
+    BuildGraphWorker,
     {
       provide: QUEUE_REGISTRY,
       useFactory: () => {

@@ -11,7 +11,7 @@ export type CmdResult ={
 };
 
 @Injectable()
-export class SandBoxService{
+export class SandboxService{
     private readonly root:string ;
     private readonly allowedCmds = new Set(['git','node','npm','yarn','pnpm']);
 

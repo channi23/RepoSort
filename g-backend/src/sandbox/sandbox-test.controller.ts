@@ -1,9 +1,9 @@
 import {Controller,Get} from '@nestjs/common';
-import {SandBoxService} from './sandbox.service';
+import {SandboxService} from './sandbox.service';
 
 @Controller('sandbox')
 export class SandboxTestController{
-    constructor(private readonly sandbox:SandBoxService){}
+    constructor(private readonly sandbox:SandboxService){}
 
     @Get('test')
     async test(){
