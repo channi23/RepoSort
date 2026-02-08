@@ -47,8 +47,10 @@ export default function AuthNavbar() {
       `}</style>
       
       <nav className="w-full h-20 flex items-center justify-between px-10 relative z-50 shadow-md" style={{ backgroundColor: '#0a0a0a' }}>
-        <h1 className="text-white text-5xl font-bold tracking-wide font-epilogue cursor-pointer" onClick={() => router.push('/')}>
-          RepoSort
+        <h1 className="text-white text-5xl font-bold tracking-wide font-epilogue">
+          <Link href="/" className="text-white hover:text-red-500 transition-colors" aria-label="RepoSort home">
+            RepoSort
+          </Link>
         </h1>
 
         <div className="flex items-center gap-8">

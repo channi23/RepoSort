@@ -4,43 +4,61 @@ import { useRouter } from "next/navigation";
 
 type AuthContextType = {
   isLoggedIn: boolean;
-  login: () => void;
+  isLoading: boolean;
+  login: () => boolean;
   logout: () => void;
 };
 
 const AuthContext = createContext<AuthContextType>({
   isLoggedIn: false,
-  login: () => {},
+  isLoading: true,
+  login: () => false,
   logout: () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
 
   useEffect(() => {
     // Check localStorage when the app starts
-    const session = localStorage.getItem("repoSortUser");
-    if (session === "logged-in") {
-      setIsLoggedIn(true);
+    try {
+      const session = localStorage.getItem("repoSortUser");
+      if (session === "logged-in") {
+        setIsLoggedIn(true);
+      }
+    } catch (error) {
+      // localStorage access failed or is disabled
+      console.warn("Failed to access localStorage:", error);
     }
+    setIsLoading(false);
   }, []);
 
-  const login = () => {
-    localStorage.setItem("repoSortUser", "logged-in");
-    setIsLoggedIn(true);
-    router.refresh(); // Refresh to ensure all components update
+  const login = (): boolean => {
+    try {
+      localStorage.setItem("repoSortUser", "logged-in");
+      setIsLoggedIn(true);
+      router.refresh(); // Refresh to ensure all components update
+      return true;
+    } catch (error) {
+      console.warn("Failed to set localStorage:", error);
+      return false;
+    }
   };
 
   const logout = () => {
-    localStorage.removeItem("repoSortUser");
+    try {
+      localStorage.removeItem("repoSortUser");
+    } catch (error) {
+      console.warn("Failed to remove from localStorage:", error);
+    }
     setIsLoggedIn(false);
     router.push("/"); // Force redirect to home
-    router.refresh(); // Clear any cached data
   };
 
   return (
-    <AuthContext.Provider value={{ isLoggedIn, login, logout }}>
+    <AuthContext.Provider value={{ isLoggedIn, isLoading, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

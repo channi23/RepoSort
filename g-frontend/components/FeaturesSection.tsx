@@ -261,7 +261,7 @@ function ExpandableNode({ id, data }: any) {
                   e.stopPropagation();
                   data.onExpandNetwork?.(id);
                 }}
-                className="mt-2 w-full py-1.5 rounded-md text-[10px] font-semibold transition-all hover:brightness-110 active:scale-98"
+                className="mt-2 w-full py-1.5 rounded-md text-[10px] font-semibold transition-all hover:brightness-110 active:scale-[0.98]"
                 style={{ backgroundColor: `${color}15`, color: color }}
               >
                 Reveal Connections
