@@ -2,6 +2,7 @@ import { Module, Global } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import {BuildGraphWorker} from './processors/build-graph.worker';
 import { Queue } from 'bullmq';
+import {StorageModule} from '../storage/storage.module'; 
 import {SandboxModule} from '../sandbox/sandbox.module';
 import { QueueTestController } from './queue-test.controller';
 import { QUEUE_NAMES } from './queues/queue.names';
@@ -10,9 +11,10 @@ import {QUEUE_REGISTRY} from './queue.tokens';
 import {TestWorker} from './processors/test.worker';
 import {AnalyzeRepoWorker} from './processors/analyze-repo.worker';
 import {CreatePlanWorker} from './processors/create-plan.worker';
+import {ApplyPlanWorker} from './processors/apply-plan.worker';
 @Global()
 @Module({
-  imports: [ConfigModule,SandboxModule],
+  imports: [ConfigModule,SandboxModule,StorageModule],
   controllers: [QueueTestController],
   providers: [
     TestWorker,
@@ -20,6 +22,7 @@ import {CreatePlanWorker} from './processors/create-plan.worker';
     BuildGraphWorker,
     AnalyzeRepoWorker,
     CreatePlanWorker,
+    ApplyPlanWorker,
     {
       provide: QUEUE_REGISTRY,
       useFactory: () => {

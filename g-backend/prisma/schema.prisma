@@ -23,6 +23,7 @@ model Project {
   graphSnapshots GraphSnapshot[]
   risks          Risk[]
   plans Plan[]
+  runs Run[]
 }
 
 model RepoSnapshot {
@@ -41,6 +42,7 @@ model RepoSnapshot {
 
   project        Project         @relation(fields: [projectId], references: [id])
   graphSnapshots GraphSnapshot[]
+  runs Run[]
 }
 
 /**
@@ -189,6 +191,7 @@ model Plan {
 
   @@index([projectId, createdAt])
   @@index([graphSnapshotId])
+  runs Run[]
 }
 
 model PlanStep {
@@ -204,4 +207,52 @@ model PlanStep {
   plan          Plan @relation(fields: [planId], references: [id])
 
   @@index([planId, order])
+}
+enum RunStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model Run {
+  id            String    @id @default(uuid())
+  projectId     String
+  repoSnapshotId String
+  planId        String
+
+  status        RunStatus @default(QUEUED)
+  createdAt     DateTime  @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+
+  sandboxRepoPath String?  // run repo path
+  installOk     Boolean?
+  buildOk       Boolean?
+  testOk        Boolean?
+  installStdout String?
+  installStderr String?
+  buildStdout   String?
+  buildStderr   String?
+  testStdout    String?
+  testStderr    String?
+
+  patch         Patch?
+
+  project       Project     @relation(fields: [projectId], references: [id])
+  repoSnapshot  RepoSnapshot @relation(fields: [repoSnapshotId], references: [id])
+  plan          Plan        @relation(fields: [planId], references: [id])
+
+  @@index([projectId, createdAt])
+  @@index([repoSnapshotId])
+  @@index([planId])
+}
+
+model Patch {
+  id        String   @id @default(uuid())
+  runId     String   @unique
+  path      String
+  createdAt DateTime @default(now())
+
+  run       Run      @relation(fields: [runId], references: [id])
 }

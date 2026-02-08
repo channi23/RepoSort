@@ -20,6 +20,14 @@ export class SandboxService{
         const configured = process.env.SANDBOX_ROOT || '../sandboxes';
         this.root = path.resolve(process.cwd(),configured);
     }
+    getRunRepoPath(projectId: string, runId: string) {
+    return this.getRepoPath(projectId, runId);
+  }
+     copyDir(src: string, dest: string) {
+    this.ensureDir(dest);
+    // Node 16+ has fs.cpSync
+    (fs as any).cpSync(src, dest, { recursive: true });
+  }
     getBasePath(projectId:string,snapshotOrRunId: string){
         //produces SANDBOX_ROOT/projectId/runId
 
