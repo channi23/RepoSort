@@ -1,31 +1,64 @@
-type TeamCardProps = {name:string;role:string;color:string;socialsColor:string;quoteColor:string;quote:string;twitterUrl?:string;instagramUrl?:string;};
-export default function TeamCard({name,role,color,socialsColor,quoteColor,quote,twitterUrl,instagramUrl,}:TeamCardProps){
+type TeamCardProps = {
+  name: string;
+  role: string;
+  color: string;
+  socialsColor: string;
+  quoteColor: string;
+  quote: string;
+  twitterUrl?: string;
+  instagramUrl?: string;
+};
+
+export default function TeamCard({
+  name,
+  role,
+  color,
+  socialsColor,
+  quoteColor,
+  quote,
+  twitterUrl,
+  instagramUrl,
+}: TeamCardProps) {
+  
+  const sectionClasses = "w-full h-full flex-shrink-0 snap-start p-8 text-white flex flex-col justify-center transition-colors duration-300";
+
   return (
-    <div className="team-card w-[400px] h-[275px] flex-shrink-0 flex flex-col overflow-y-auto snap-y snap-mandatory scroll-smooth rounded-[8px] shadow-[0px_4px_4px_#F03E3F]" style={{scrollbarWidth:'none',msOverflowStyle:'none'}}>
+    <div 
+      className="team-card w-[400px] h-[275px] flex-shrink-0 flex flex-col overflow-y-auto snap-y snap-mandatory scroll-smooth rounded-[12px] shadow-lg hover:shadow-[0px_6px_12px_#F03E3F] transition-shadow duration-300" 
+      style={{ 
+        scrollbarWidth: 'none', 
+        msOverflowStyle: 'none',
+        WebkitOverflowScrolling: 'touch' // Smoother scrolling on iOS
+      }}
+    >
       <style>{`.team-card::-webkit-scrollbar { display: none; }`}</style>
-      <div style={{backgroundColor:color}} className="w-full h-full flex-shrink-0 snap-start p-6 text-white flex flex-col justify-center">
-        <h3 className="text-3xl font-itim leading-tight">{name}</h3>
-        <p className="text-3xl mt-4 font-itim leading-tight">{role}</p>
+
+      {/* Identity Section */}
+      <div style={{ backgroundColor: color }} className={sectionClasses}>
+        <h3 className="text-4xl font-itim leading-none tracking-tight">{name}</h3>
+        <div className="w-12 h-1 bg-white/30 my-4 rounded-full" /> {/* Subtle visual separator */}
+        <p className="text-2xl font-itim opacity-90">{role}</p>
       </div>
-      <div style={{backgroundColor:socialsColor}} className="w-full h-full flex-shrink-0 snap-start p-6 text-white flex flex-col justify-center">
-        <h4 className="text-3xl font-itim mb-2"> Socials:</h4>
-        <div className="text-3xl font-itim leading-snug">
-          {twitterUrl ? (
-            <a href={twitterUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">Twitter</a>
-          ) : (
-            <span>Twitter</span>
-          )}
-          <br />
-          {instagramUrl ? (
-            <a href={instagramUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">Instagram</a>
-          ) : (
-            <span>Instagram</span>
-          )}
+
+      {/* Socials Section */}
+      <div style={{ backgroundColor: socialsColor }} className={sectionClasses}>
+        <h4 className="text-xl uppercase tracking-widest font-itim mb-4 opacity-80">Socials</h4>
+        <div className="flex flex-col gap-3 text-3xl font-itim">
+          <a href={twitterUrl || "#"} className={`${!twitterUrl && 'pointer-events-none opacity-50'} hover:translate-x-2 transition-transform duration-200`}>
+            Twitter
+          </a>
+          <a href={instagramUrl || "#"} className={`${!instagramUrl && 'pointer-events-none opacity-50'} hover:translate-x-2 transition-transform duration-200`}>
+            Instagram
+          </a>
         </div>
       </div>
-      <div style={{backgroundColor:quoteColor}} className="w-full h-full flex-shrink-0 snap-start p-6 text-white flex flex-col justify-center">
-        <h4 className="text-3xl font-itim mb-2">Quote : </h4>
-        <p className="text-3xl font-itim leading-tight">{quote}</p>
+
+      {/* Quote Section */}
+      <div style={{ backgroundColor: quoteColor }} className={sectionClasses}>
+        <h4 className="text-xl uppercase tracking-widest font-itim mb-4 opacity-80">Quote</h4>
+        <p className="text-2xl font-itim leading-relaxed italic">
+          &ldquo;{quote}&rdquo;
+        </p>
       </div>
     </div>
   );

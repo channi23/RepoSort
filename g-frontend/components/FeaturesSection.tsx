@@ -1,582 +1,751 @@
 "use client";
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import ReactFlow, {
   Background,
   Controls,
   useReactFlow,
   ReactFlowProvider,
-  Node,
-  Edge,
   Handle,
   Position,
+  Node,
+  Edge,
+  NodeChange,
+  applyNodeChanges,
 } from "reactflow";
-
-function ConditionalNode({ id, data }: { id: string; data: any }) {
-  const { getEdges } = useReactFlow();
-
-  const edges = getEdges();
-
-  const hasTarget = edges.some((e) => e.target === id);
-  const hasSource = edges.some((e) => e.source === id);
-
-  return (
-    <div className="bg-white border border-black rounded-lg px-6 py-3 text-sm font-medium">
-      {hasTarget && <Handle type="target" position={Position.Top} />}
-      <span>{data.label}</span>
-      {hasSource && <Handle type="source" position={Position.Bottom} />}
-    </div>
-  );
-}
 import "reactflow/dist/style.css";
 import FeatureCard from "./FeatureCard";
 
-function AutoFitOnChange({ view }: { view: string }) {
-  const { fitView } = useReactFlow();
+// Node type colors
+const nodeColors: Record<string, string> = {
+  root: "#4F46E5",
+  system: "#059669",
+  layer: "#DC2626",
+  folder: "#D97706",
+  file: "#7C3AED",
+};
 
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      fitView({ padding: 0.2, duration: 400 });
-    }, 50);
-
-    return () => clearTimeout(timeout);
-  }, [view, fitView]);
-
-  return null;
+// Type definitions
+interface HierarchyNode {
+  label: string;
+  type: string;
+  children?: string[];
+  details?: {
+    functions?: string[];
+    components?: string[];
+    imports?: string[];
+    exports?: string[];
+  };
+  connections?: string[]; // IDs of nodes this connects to
 }
 
-const INITIAL_FILE_INSPECTORS: Record<string, any> = {
+type HierarchyMap = Record<string, HierarchyNode>;
+
+// Hierarchical data structure with details
+const hierarchy: HierarchyMap = {
+  project: {
+    label: "Your Codebase",
+    type: "root",
+    children: ["frontend", "backend", "database"],
+  },
+  frontend: {
+    label: "Frontend",
+    type: "system",
+    children: ["ui"],
+    details: {
+      components: ["Pages", "Components", "Layouts"],
+    },
+  },
+  backend: {
+    label: "Backend",
+    type: "system",
+    children: ["api"],
+    details: {
+      components: ["Controllers", "Services", "Auth"],
+    },
+  },
+  database: {
+    label: "Database",
+    type: "system",
+    children: ["db"],
+    details: {
+      components: ["Tables", "Indexes", "Migrations"],
+    },
+  },
+  ui: {
+    label: "UI",
+    type: "layer",
+    children: ["pages", "components"],
+  },
+  pages: {
+    label: "Pages",
+    type: "folder",
+    children: ["home", "dashboard"],
+  },
+  components: {
+    label: "Components",
+    type: "folder",
+    children: ["navbar", "card"],
+  },
   home: {
-    name: "Home.tsx",
-    path: "/app/pages/Home.tsx",
-    sections: [
-      {
-        id: "layout",
-        label: "Layout",
-        props: {
-          wrapper: "MainLayout",
-          backgroundColor: "#ffffff",
-          alignment: "center",
-          maxWidth: "1200px",
-          padding: "24px",
-          responsive: true,
-        },
-      },
-      {
-        id: "hero",
-        label: "Hero Section",
-        props: {
-          background: "gradient",
-          hasCTA: true,
-          animated: true,
-        },
-      },
-      {
-        id: "features",
-        label: "Features Section",
-        props: {
-          cards: 5,
-          scrollSnap: true,
-        },
-      },
-      {
-        id: "footer",
-        label: "Footer",
-        props: {
-          variant: "minimal",
-          links: 6,
-        },
-      },
-    ],
+    label: "Home.tsx",
+    type: "file",
+    details: {
+      components: ["HeroSection", "FeatureCards", "Footer"],
+      functions: ["handleScroll", "loadData"],
+      imports: ["React", "FeatureCard", "Navbar"],
+    },
+    connections: ["navbar", "card"],
   },
-
   dashboard: {
-    name: "Dashboard.tsx",
-    path: "/app/pages/Dashboard.tsx",
-    sections: [
-      {
-        id: "layout",
-        label: "Layout",
-        props: {
-          backgroundColor: "#f9fafb",
-          alignment: "left",
-          padding: "16px",
-          grid: "12-column",
-        },
-      },
-      {
-        id: "header",
-        label: "Header",
-        props: {
-          title: "Dashboard",
-          showBreadcrumbs: true,
-          actions: ["Refresh", "Export"],
-        },
-      },
-      {
-        id: "stats",
-        label: "Stats Cards",
-        props: {
-          cards: 4,
-          columns: 4,
-          animated: true,
-        },
-      },
-      {
-        id: "table",
-        label: "Repositories Table",
-        props: {
-          rowsPerPage: 25,
-          sortable: true,
-          filterable: true,
-        },
-      },
-    ],
+    label: "Dashboard.tsx",
+    type: "file",
+    details: {
+      components: ["Header", "StatsCards", "RepoTable"],
+      functions: ["fetchRepos", "handleRefresh", "exportData"],
+      imports: ["React", "Card", "Navbar"],
+    },
+    connections: ["navbar", "card", "repoCtrl"],
   },
-
   navbar: {
-    name: "Navbar.tsx",
-    path: "/app/components/Navbar.tsx",
-    sections: [
-      {
-        id: "container",
-        label: "Container",
-        props: {
-          position: "fixed",
-          height: "64px",
-          backgroundColor: "#0f172a",
-          blur: true,
-        },
-      },
-      {
-        id: "brand",
-        label: "Brand",
-        props: {
-          logo: "RepoSort",
-          link: "/",
-        },
-      },
-      {
-        id: "navigation",
-        label: "Navigation",
-        props: {
-          links: ["Home", "Dashboard", "Repositories"],
-          activeStyle: "underline",
-        },
-      },
-      {
-        id: "actions",
-        label: "Actions",
-        props: {
-          buttons: ["Login", "GitHub"],
-          alignment: "right",
-        },
-      },
-    ],
+    label: "Navbar.tsx",
+    type: "file",
+    details: {
+      components: ["Logo", "NavLinks", "UserMenu"],
+      functions: ["handleAuth", "toggleMenu"],
+      imports: ["React", "Link"],
+      exports: ["Navbar"],
+    },
+    connections: ["authSvc"],
   },
-
   card: {
-    name: "Card.tsx",
-    path: "/app/components/Card.tsx",
-    sections: [
-      {
-        id: "wrapper",
-        label: "Wrapper",
-        props: {
-          backgroundColor: "#ffffff",
-          borderRadius: "12px",
-          shadow: "md",
-          padding: "16px",
-        },
-      },
-      {
-        id: "header",
-        label: "Header",
-        props: {
-          showDivider: true,
-          titleSize: "sm",
-        },
-      },
-      {
-        id: "content",
-        label: "Content",
-        props: {
-          slots: ["title", "body", "actions"],
-          gap: "12px",
-        },
-      },
-      {
-        id: "footer",
-        label: "Footer",
-        props: {
-          alignment: "right",
-          showActions: true,
-        },
-      },
-    ],
+    label: "Card.tsx",
+    type: "file",
+    details: {
+      components: ["CardHeader", "CardBody", "CardFooter"],
+      functions: ["handleClick"],
+      imports: ["React"],
+      exports: ["Card"],
+    },
   },
-
-  // Backend file inspectors (added below card)
+  api: {
+    label: "API",
+    type: "layer",
+    children: ["controllers", "services"],
+  },
+  controllers: {
+    label: "Controllers",
+    type: "folder",
+    children: ["userCtrl", "repoCtrl"],
+  },
+  services: {
+    label: "Services",
+    type: "folder",
+    children: ["authSvc", "graphSvc"],
+  },
   userCtrl: {
-    name: "UserController.ts",
-    path: "/api/controllers/UserController.ts",
-    sections: [
-      {
-        id: "routes",
-        label: "Routes",
-        props: {
-          endpoints: ["GET /users", "POST /users"],
-          protected: true,
-        },
-      },
-      {
-        id: "logic",
-        label: "Business Logic",
-        props: {
-          complexity: "medium",
-          sideEffects: ["db-write"],
-        },
-      },
-    ],
+    label: "UserController.ts",
+    type: "file",
+    details: {
+      functions: ["getUsers", "createUser", "updateUser", "deleteUser"],
+      imports: ["AuthService", "UserModel"],
+    },
+    connections: ["authSvc", "users"],
   },
-
   repoCtrl: {
-    name: "RepoController.ts",
-    path: "/api/controllers/RepoController.ts",
-    sections: [
-      {
-        id: "routes",
-        label: "Routes",
-        props: {
-          endpoints: ["GET /repos", "POST /repos"],
-          protected: true,
-        },
-      },
-      {
-        id: "logic",
-        label: "Business Logic",
-        props: {
-          complexity: "high",
-          sideEffects: ["db-write", "fs-read"],
-        },
-      },
-    ],
+    label: "RepoController.ts",
+    type: "file",
+    details: {
+      functions: ["getRepos", "createRepo", "analyzeRepo", "deleteRepo"],
+      imports: ["GraphService", "RepoModel"],
+    },
+    connections: ["graphSvc", "repos"],
   },
-
   authSvc: {
-    name: "AuthService.ts",
-    path: "/api/services/AuthService.ts",
-    sections: [
-      {
-        id: "auth",
-        label: "Authentication",
-        props: {
-          strategy: "JWT",
-          tokenTTL: "15m",
-        },
-      },
-      {
-        id: "crypto",
-        label: "Crypto",
-        props: {
-          hashing: "bcrypt",
-          saltRounds: 12,
-        },
-      },
-    ],
+    label: "AuthService.ts",
+    type: "file",
+    details: {
+      functions: ["login", "logout", "verifyToken", "refreshToken"],
+      imports: ["JWT", "bcrypt", "UserModel"],
+      exports: ["AuthService"],
+    },
+    connections: ["jwt", "users"],
   },
-
   graphSvc: {
-    name: "GraphService.ts",
-    path: "/api/services/GraphService.ts",
-    sections: [
-      {
-        id: "analysis",
-        label: "Graph Analysis",
-        props: {
-          algorithms: ["DFS", "BFS"],
-          caching: true,
-        },
-      },
-    ],
+    label: "GraphService.ts",
+    type: "file",
+    details: {
+      functions: ["analyzeDependencies", "findCycles", "calculateMetrics"],
+      imports: ["Graph", "DFS", "BFS"],
+      exports: ["GraphService"],
+    },
   },
-
   jwt: {
-    name: "JWT.ts",
-    path: "/api/auth/JWT.ts",
-    sections: [
-      {
-        id: "tokens",
-        label: "Token Handling",
-        props: {
-          type: "access+refresh",
-          rotation: true,
-        },
-      },
-    ],
+    label: "JWT.ts",
+    type: "file",
+    details: {
+      functions: ["sign", "verify", "decode"],
+      imports: ["jsonwebtoken"],
+      exports: ["JWT"],
+    },
   },
-
   oauth: {
-    name: "OAuth.ts",
-    path: "/api/auth/OAuth.ts",
-    sections: [
-      {
-        id: "providers",
-        label: "Providers",
-        props: {
-          enabled: ["GitHub", "Google"],
-        },
-      },
-    ],
+    label: "OAuth.ts",
+    type: "file",
+    details: {
+      functions: ["githubAuth", "googleAuth", "handleCallback"],
+      imports: ["passport"],
+      exports: ["OAuth"],
+    },
   },
-
+  db: {
+    label: "Database",
+    type: "layer",
+    children: ["tables", "indexes"],
+  },
+  tables: {
+    label: "Tables",
+    type: "folder",
+    children: ["users", "repos"],
+  },
+  indexes: {
+    label: "Indexes",
+    type: "folder",
+    children: ["userIdx", "repoIdx"],
+  },
   users: {
-    name: "users",
-    path: "database.tables.users",
-    sections: [
-      {
-        id: "columns",
-        label: "Columns",
-        props: {
-          id: "uuid (PK)",
-          email: "varchar (unique)",
-          created_at: "timestamp",
-        },
-      },
-      {
-        id: "usage",
-        label: "Usage",
-        props: {
-          readHeavy: true,
-          writtenBy: ["AuthService", "UserController"],
-        },
-      },
-    ],
+    label: "users",
+    type: "file",
+    details: {
+      components: ["id", "email", "password_hash", "created_at"],
+    },
   },
-
   repos: {
-    name: "repositories",
-    path: "database.tables.repositories",
-    sections: [
-      {
-        id: "columns",
-        label: "Columns",
-        props: {
-          id: "uuid (PK)",
-          owner_id: "uuid (FK)",
-          name: "varchar",
-        },
-      },
-      {
-        id: "usage",
-        label: "Usage",
-        props: {
-          readHeavy: true,
-          writtenBy: ["RepoController"],
-        },
-      },
-    ],
+    label: "repositories",
+    type: "file",
+    details: {
+      components: ["id", "name", "owner_id", "created_at"],
+    },
   },
-
   userIdx: {
-    name: "users_email_idx",
-    path: "database.indexes.users_email_idx",
-    sections: [
-      {
-        id: "definition",
-        label: "Index Definition",
-        props: {
-          column: "email",
-          unique: true,
-          type: "btree",
-        },
-      },
-    ],
+    label: "users_email_idx",
+    type: "file",
+    details: {
+      components: ["email (unique, btree)"],
+    },
   },
-
   repoIdx: {
-    name: "repos_owner_idx",
-    path: "database.indexes.repos_owner_idx",
-    sections: [
-      {
-        id: "definition",
-        label: "Index Definition",
-        props: {
-          column: "owner_id",
-          unique: false,
-          type: "btree",
-        },
-      },
-    ],
+    label: "repos_owner_idx",
+    type: "file",
+    details: {
+      components: ["owner_id (btree)"],
+    },
   },
 };
 
-export default function FeaturesSection(){
-  const [view, setView] = useState<
-    "project" | "system" | "frontend" | "backend" | "database"
-  >("project");
-  const [selectedNode, setSelectedNode] = useState<{
-    id: string;
-    label: string;
-  } | null>(null);
-  const [activeSection, setActiveSection] = useState<string | null>(null);
-  // Scroll state for feature cards
-  const [atTop, setAtTop] = useState(true);
+// Custom node component
+function ExpandableNode({ id, data }: any) {
+  const color = nodeColors[data.type] || "#6B7280";
+  const hasChildren = data.hasChildren;
+  const isExpanded = data.isExpanded;
+  const showDetails = data.showDetails;
+  const nodeInfo = hierarchy[id];
 
-  const graph = useMemo<{
-    nodes: Node[];
-    edges: Edge[];
-  }>(() => {
-    if (view === "project") {
-      return {
-        nodes: [
-          {
-            id: "project",
-            data: { label: "Your Codebase" },
-            position: { x: 150, y: 150 },
-          },
-        ],
-        edges: [],
-      };
-    }
+  return (
+    <div
+      className="relative cursor-pointer hover:scale-105 transition-transform"
+      style={{
+        transition: "all 0.4s cubic-bezier(0.4, 0, 0.2, 1)",
+        transform: showDetails ? "scale(1.15)" : isExpanded ? "scale(1.05)" : "scale(1)",
+      }}
+    >
+      <div
+        className="rounded-xl border-2 font-semibold text-sm shadow-lg bg-white overflow-hidden"
+        style={{
+          borderColor: color,
+          minWidth: showDetails ? "280px" : "140px",
+          maxWidth: showDetails ? "320px" : "160px",
+          boxShadow: showDetails
+            ? `0 20px 40px -10px ${color}80`
+            : isExpanded
+            ? `0 10px 25px -5px ${color}60`
+            : `0 4px 6px -1px ${color}30`,
+        }}
+      >
+        {/* Header */}
+        <div className="px-5 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <div
+              className="w-2 h-2 rounded-full"
+              style={{ backgroundColor: color }}
+            />
+            <span style={{ color }} className="truncate">{data.label}</span>
+          </div>
+          {hasChildren && (
+            <div
+              className="flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold shrink-0"
+              style={{
+                backgroundColor: `${color}20`,
+                color: color,
+                transform: isExpanded ? "rotate(45deg)" : "rotate(0deg)",
+                transition: "transform 0.3s ease",
+              }}
+            >
+              +
+            </div>
+          )}
+        </div>
 
-    if (view === "system") {
-      return {
-        nodes: [
-          { id: "frontend", data: { label: "Frontend" }, position: { x: 50, y: 200 } },
-          { id: "backend", data: { label: "Backend" }, position: { x: 200, y: 120 } },
-          { id: "database", data: { label: "Database" }, position: { x: 350, y: 200 } },
-        ],
-        edges: [
-          { id: "f-b", source: "frontend", target: "backend" },
-          { id: "b-d", source: "backend", target: "database" },
-        ],
-      };
-    }
+        {/* Details Panel */}
+        {showDetails && nodeInfo?.details && (
+          <div 
+            className="border-t px-4 py-3 text-xs overflow-y-auto"
+            style={{ 
+              borderColor: `${color}20`,
+              maxHeight: "300px",
+            }}
+          >
+            {nodeInfo.details.functions && (
+              <div className="mb-3">
+                <div className="font-bold text-black/60 mb-1.5 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+                  Functions
+                </div>
+                <div className="space-y-1">
+                  {nodeInfo.details.functions.slice(0, 5).map((fn, i) => (
+                    <div
+                      key={i}
+                      className="px-2 py-1 rounded text-[11px] font-mono truncate"
+                      style={{ backgroundColor: `${color}10`, color }}
+                      title={fn}
+                    >
+                      {fn}()
+                    </div>
+                  ))}
+                  {nodeInfo.details.functions.length > 5 && (
+                    <div className="text-[10px] text-gray-500 italic">
+                      +{nodeInfo.details.functions.length - 5} more...
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
-    if (view === "frontend") {
-      return {
-        nodes: [
-          { id: "ui", data: { label: "UI" }, position: { x: 40, y: 160 } },
+            {nodeInfo.details.components && (
+              <div className="mb-3">
+                <div className="font-bold text-black/60 mb-1.5 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+                  Components
+                </div>
+                <div className="space-y-1">
+                  {nodeInfo.details.components.slice(0, 5).map((comp, i) => (
+                    <div
+                      key={i}
+                      className="px-2 py-1 rounded text-[11px] truncate"
+                      style={{ backgroundColor: `${color}10`, color }}
+                      title={comp}
+                    >
+                      {comp}
+                    </div>
+                  ))}
+                  {nodeInfo.details.components.length > 5 && (
+                    <div className="text-[10px] text-gray-500 italic">
+                      +{nodeInfo.details.components.length - 5} more...
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
-          { id: "pages", data: { label: "Pages" }, position: { x: 220, y: 60 } },
-          { id: "home", data: { label: "Home.tsx" }, position: { x: 400, y: 20 } },
-          { id: "dashboard", data: { label: "Dashboard.tsx" }, position: { x: 400, y: 100 } },
+            {nodeInfo.details.imports && (
+              <div className="mb-2">
+                <div className="font-bold text-black/60 mb-1 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+                  Imports
+                </div>
+                <div className="text-[10px] text-black/60 truncate" title={nodeInfo.details.imports.join(", ")}>
+                  {nodeInfo.details.imports.slice(0, 3).join(", ")}
+                  {nodeInfo.details.imports.length > 3 && "..."}
+                </div>
+              </div>
+            )}
 
-          { id: "components", data: { label: "Components" }, position: { x: 220, y: 260 } },
-          { id: "navbar", data: { label: "Navbar" }, position: { x: 400, y: 220 } },
-          { id: "card", data: { label: "Card" }, position: { x: 400, y: 300 } },
-        ],
-        edges: [
-          { id: "ui-pages", source: "ui", target: "pages" },
-          { id: "ui-components", source: "ui", target: "components" },
+            {/* Expand Network Button */}
+            {nodeInfo.connections && nodeInfo.connections.length > 0 && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (data.onExpandNetwork) {
+                    data.onExpandNetwork(id);
+                  }
+                }}
+                className="mt-3 w-full py-2 rounded-lg font-semibold text-xs transition-all hover:scale-105 active:scale-95"
+                style={{
+                  backgroundColor: color,
+                  color: "white",
+                }}
+              >
+                🔗 Expand Network ({nodeInfo.connections.length})
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
-          { id: "pages-home", source: "pages", target: "home" },
-          { id: "pages-dashboard", source: "pages", target: "dashboard" },
-
-          { id: "components-navbar", source: "components", target: "navbar" },
-          { id: "components-card", source: "components", target: "card" },
-        ],
-      };
-    }
-
-    if (view === "backend") {
-      return {
-        nodes: [
-          { id: "api", data: { label: "API" }, position: { x: 40, y: 160 } },
-
-          { id: "controllers", data: { label: "Controllers" }, position: { x: 220, y: 40 } },
-          { id: "userCtrl", data: { label: "UserController" }, position: { x: 400, y: 20 } },
-          { id: "repoCtrl", data: { label: "RepoController" }, position: { x: 400, y: 80 } },
-
-          { id: "services", data: { label: "Services" }, position: { x: 220, y: 160 } },
-          { id: "authSvc", data: { label: "AuthService" }, position: { x: 400, y: 140 } },
-          { id: "graphSvc", data: { label: "GraphService" }, position: { x: 400, y: 200 } },
-
-          { id: "auth", data: { label: "Auth" }, position: { x: 220, y: 280 } },
-          { id: "jwt", data: { label: "JWT" }, position: { x: 400, y: 260 } },
-          { id: "oauth", data: { label: "OAuth" }, position: { x: 400, y: 320 } },
-        ],
-        edges: [
-          { id: "api-c", source: "api", target: "controllers" },
-          { id: "api-s", source: "api", target: "services" },
-          { id: "api-a", source: "api", target: "auth" },
-
-          { id: "c-user", source: "controllers", target: "userCtrl" },
-          { id: "c-repo", source: "controllers", target: "repoCtrl" },
-
-          { id: "s-auth", source: "services", target: "authSvc" },
-          { id: "s-graph", source: "services", target: "graphSvc" },
-
-          { id: "a-jwt", source: "auth", target: "jwt" },
-          { id: "a-oauth", source: "auth", target: "oauth" },
-        ],
-      };
-    }
-
-    return {
-      nodes: [
-        { id: "db", data: { label: "Database" }, position: { x: 260, y: 20 } },
-
-        { id: "tables", data: { label: "Tables" }, position: { x: 120, y: 140 } },
-        { id: "users", data: { label: "users" }, position: { x: 40, y: 260 } },
-        { id: "repos", data: { label: "repositories" }, position: { x: 200, y: 260 } },
-
-        { id: "indexes", data: { label: "Indexes" }, position: { x: 400, y: 140 } },
-        { id: "userIdx", data: { label: "users_email_idx" }, position: { x: 340, y: 260 } },
-        { id: "repoIdx", data: { label: "repos_owner_idx" }, position: { x: 500, y: 260 } },
-      ],
-      edges: [
-        { id: "db-t", source: "db", target: "tables" },
-        { id: "db-i", source: "db", target: "indexes" },
-
-        { id: "t-users", source: "tables", target: "users" },
-        { id: "t-repos", source: "tables", target: "repos" },
-
-        { id: "i-users", source: "indexes", target: "userIdx" },
-        { id: "i-repos", source: "indexes", target: "repoIdx" },
-      ],
-    };
-  }, [view]);
-
-  const [inspectorState, setInspectorState] = useState<Record<string, any>>(
-    INITIAL_FILE_INSPECTORS
+      {data.hasTarget && (
+        <Handle
+          type="target"
+          position={Position.Top}
+          className="!w-3 !h-3 !border-2 !bg-white"
+          style={{ borderColor: color }}
+        />
+      )}
+      {(hasChildren || (nodeInfo?.connections && nodeInfo.connections.length > 0)) && (
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          className="!w-3 !h-3 !border-2 !bg-white"
+          style={{ borderColor: color }}
+        />
+      )}
+    </div>
   );
+}
+
+function GraphContent() {
+  const [expandedNodes, setExpandedNodes] = useState(new Set(["project"]));
+  const [detailedNode, setDetailedNode] = useState<string | null>(null);
+  const [networkExpandedNodes, setNetworkExpandedNodes] = useState(new Set<string>());
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
+  const [hasUserInteracted, setHasUserInteracted] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
+  const { fitView } = useReactFlow();
+
+  // Define handleExpandNetwork BEFORE useMemo
+  const handleExpandNetwork = useCallback((nodeId: string) => {
+    setNetworkExpandedNodes((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(nodeId)) {
+        newSet.delete(nodeId);
+      } else {
+        newSet.add(nodeId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  // Build graph structure
+  const initialGraph = useMemo(() => {
+    const nodeList: Node[] = [];
+    const edgeList: Edge[] = [];
+    const processedNodes = new Set<string>();
+
+    function addNode(id: string, depth: number, x: number, y: number, parentId: string | null = null) {
+      if (processedNodes.has(id)) return;
+      processedNodes.add(id);
+
+      const nodeData = hierarchy[id];
+      if (!nodeData) return;
+
+      const isExpanded = expandedNodes.has(id);
+      const hasChildren = nodeData.children && nodeData.children.length > 0;
+      const showDetails = detailedNode === id;
+
+      nodeList.push({
+        id,
+        type: "expandable",
+        data: {
+          label: nodeData.label,
+          type: nodeData.type,
+          hasChildren,
+          isExpanded,
+          showDetails,
+          hasTarget: parentId !== null,
+          onExpandNetwork: handleExpandNetwork,
+        },
+        position: { x, y },
+        draggable: true,
+      });
+
+      // Add hierarchical children
+      if (isExpanded && hasChildren) {
+        const childCount = nodeData.children!.length;
+        const spacing = 200;
+        nodeData.children!.forEach((childId, index) => {
+          const childX = x + (index - (childCount - 1) / 2) * spacing;
+          const childY = y + 140;
+          
+          addNode(childId, depth + 1, childX, childY, id);
+
+          edgeList.push({
+            id: `${id}-${childId}`,
+            source: id,
+            target: childId,
+            animated: true,
+            style: {
+              stroke: nodeColors[nodeData.type] || "#6B7280",
+              strokeWidth: 2,
+            },
+            type: "smoothstep",
+          });
+        });
+      }
+
+      // Add network connections (when expanded)
+      if (networkExpandedNodes.has(id) && nodeData.connections) {
+        nodeData.connections.forEach((connId, index) => {
+          const connNode = hierarchy[connId];
+          if (!connNode || processedNodes.has(connId)) return;
+
+          // Position connected nodes around the source
+          const angle = (index / nodeData.connections!.length) * Math.PI * 2;
+          const radius = 250;
+          const connX = x + Math.cos(angle) * radius;
+          const connY = y + Math.sin(angle) * radius;
+
+          addNode(connId, depth, connX, connY, id);
+
+          edgeList.push({
+            id: `network-${id}-${connId}`,
+            source: id,
+            target: connId,
+            animated: true,
+            style: {
+              stroke: "#F59E0B",
+              strokeWidth: 2,
+              strokeDasharray: "5,5",
+            },
+            type: "smoothstep",
+            label: "uses",
+            labelStyle: { fontSize: 10, fill: "#F59E0B" },
+          });
+        });
+      }
+    }
+
+    addNode("project", 0, 400, 50);
+    return { nodes: nodeList, edges: edgeList };
+  }, [expandedNodes, detailedNode, networkExpandedNodes, handleExpandNetwork]);
+
+  // Update nodes and edges
+  useEffect(() => {
+    setNodes(initialGraph.nodes);
+    setEdges(initialGraph.edges);
+  }, [initialGraph]);
+
+  // Handle node dragging
+  const onNodesChange = useCallback(
+    (changes: NodeChange[]) => {
+      // Mark that user has interacted (dragged/moved nodes)
+      const hasDragChange = changes.some(c => c.type === 'position' && (c as any).dragging);
+      if (hasDragChange) {
+        setHasUserInteracted(true);
+      }
+      setNodes((nds) => applyNodeChanges(changes, nds));
+    },
+    []
+  );
+
+  // Initial fit view only
+  useEffect(() => {
+    if (!isInitialized && nodes.length > 0) {
+      const timer = setTimeout(() => {
+        fitView({ padding: 0.3, duration: 600, maxZoom: 1.5 });
+        setIsInitialized(true);
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [nodes.length, isInitialized, fitView]);
+
+  // Auto-fit only when structure changes AND user hasn't manually interacted
+  useEffect(() => {
+    if (!hasUserInteracted && isInitialized) {
+      const timer = setTimeout(() => {
+        fitView({ padding: 0.3, duration: 600, maxZoom: 1.5 });
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [expandedNodes.size, networkExpandedNodes.size, hasUserInteracted, isInitialized, fitView]);
+
+  const handleNodeClick = useCallback((event: any, node: any) => {
+    event.preventDefault();
+    event.stopPropagation();
+    
+    console.log('Node clicked:', node.id); // DEBUG
+    
+    const nodeData = hierarchy[node.id];
+    if (!nodeData) return;
+
+    // If node has details, show them
+    if (nodeData.details) {
+      console.log('Toggling details for:', node.id); // DEBUG
+      if (detailedNode === node.id) {
+        setDetailedNode(null);
+      } else {
+        setDetailedNode(node.id);
+      }
+      return;
+    }
+
+    // Otherwise expand/collapse children
+    const hasChildren = nodeData.children && nodeData.children.length > 0;
+    if (!hasChildren) return;
+
+    console.log('Toggling expansion for:', node.id); // DEBUG
+    setExpandedNodes((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(node.id)) {
+        // Collapse - just remove this node, keep children visible
+        newSet.delete(node.id);
+      } else {
+        // Expand - add this node
+        newSet.add(node.id);
+      }
+      return newSet;
+    });
+  }, [detailedNode]);
+
+  const handleReset = useCallback(() => {
+    setExpandedNodes(new Set(["project"]));
+    setDetailedNode(null);
+    setNetworkExpandedNodes(new Set());
+    setHasUserInteracted(false);
+    setTimeout(() => fitView({ padding: 0.3, duration: 800 }), 100);
+  }, [fitView]);
+
+  return (
+    <>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        nodeTypes={{ expandable: ExpandableNode }}
+        onNodeClick={handleNodeClick}
+        minZoom={0.1}
+        maxZoom={4}
+        nodesDraggable={true}
+        nodesConnectable={false}
+        elementsSelectable={true}
+        selectNodesOnDrag={false}
+        zoomOnScroll={true}
+        panOnScroll={false}
+        panOnDrag={true}
+        preventScrolling={false}
+        nodesFocusable={true}
+        onMove={() => setHasUserInteracted(true)}
+        onMoveEnd={() => setHasUserInteracted(true)}
+        onPaneClick={() => {
+          // Clicking on empty space closes details
+          if (detailedNode) {
+            setDetailedNode(null);
+          }
+        }}
+      >
+        <Background gap={20} size={1} color="#00000008" />
+        <Controls />
+      </ReactFlow>
+
+      <button
+        onClick={handleReset}
+        className="absolute top-4 left-4 z-20 px-4 py-2 rounded-lg bg-white border-2 border-black/10 shadow-lg text-sm font-semibold hover:bg-black hover:text-white transition-all"
+      >
+        ↺ Reset View
+      </button>
+
+      {/* Zoom hint */}
+      {detailedNode && (
+        <div className="absolute top-4 right-4 z-20 px-4 py-2 rounded-lg bg-white/90 border border-black/10 shadow-lg text-xs font-medium">
+          Click anywhere to exit detail view
+        </div>
+      )}
+    </>
+  );
+}
+
+export default function FeaturesSection() {
+  const [atTop, setAtTop] = useState(true);
+  const [currentCardIndex, setCurrentCardIndex] = useState(0);
+  
+  const cardColors = ["#8A38F5", "#F03E3F", "#375922", "#736C2E", "#2D4C8F"];
+  
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    setAtTop(el.scrollTop === 0);
+    
+    // Calculate which card is currently in view
+    const cardHeight = 600 + 32; // card height + gap
+    const currentIndex = Math.round(el.scrollTop / cardHeight);
+    setCurrentCardIndex(Math.min(currentIndex, 4)); // max index is 4 (5 cards)
+  };
 
   return (
     <section className="relative px-6 py-16 overflow-hidden bg-[#B3BAC9]">
-      <div className="relative z-10" >
-        <h2 className="text-center text-5xl mb-10 text-black font-italiana">Built for students, researchers, and production engineers.</h2>
+      <div className="relative z-10">
+        <h2 className="text-center text-5xl mb-10 text-black font-italiana">
+          Built for students, researchers, and production engineers.
+        </h2>
         <div className="bg-[#D9D9D9] rounded-[15px] border border-black shadow-[0px_4px_4px_rgba(49.60,161.96,196.15,0.66)] px-8 py-6 w-full mx-auto">
-          <div className="grid grid-cols-1 lg:grid-cols-[520px_520px] justify-center gap-12">
-
+          <div className="grid grid-cols-1 lg:grid-cols-[600px_520px] justify-center gap-8">
             {/* LEFT: Feature cards */}
-            <div className="relative">
+            <div className="relative flex gap-4">
+              {/* Custom Scroll Indicator - Single dynamic bar */}
+              <div className="flex flex-col justify-center py-8 flex-shrink-0 relative h-[600px]">
+                {/* Background track */}
+                <div className="absolute top-8 bottom-8 left-0 w-1.5 bg-gray-300/40 rounded-full" />
+                
+                {/* Active scroll thumb that changes color */}
+                <div
+                  className="absolute left-0 w-2 rounded-full transition-all duration-300 shadow-lg"
+                  style={{
+                    backgroundColor: cardColors[currentCardIndex] || cardColors[0],
+                    top: `${32 + (currentCardIndex * 116)}px`, // 32px start + index * (96px thumb + 20px gap)
+                    height: '96px',
+                  }}
+                />
+              </div>
+              
+              {/* Scrollable cards container */}
               <div
-                className="h-[420px] overflow-y-auto pr-4 snap-y snap-mandatory space-y-6 scrollbar-hide"
-                onScroll={(e) => {
-                  const el = e.currentTarget;
-                  setAtTop(el.scrollTop === 0);
-                }}
+                className="h-[600px] overflow-y-auto pr-4 snap-y snap-mandatory space-y-8 scrollbar-hide flex-1"
+                onScroll={handleScroll}
               >
-                <div className="snap-start h-[420px] flex items-center">
-                  <FeatureCard title="Visualize Your Code" description="See your entire repository as an interactive system graph." color="#8A38F5"/>
+                <div className="snap-start h-[600px] flex items-center py-4">
+                  <FeatureCard
+                    title="Visualize Your Code"
+                    description="See your entire repository as an interactive system graph."
+                    color="#8A38F5"
+                  />
                 </div>
-                <div className="snap-start h-[420px] flex items-center">
-                  <FeatureCard title="Find Hidden Risks" description="Automatically detect architectural and security issues." color="#F03E3F"/>
+                <div className="snap-start h-[600px] flex items-center py-4">
+                  <FeatureCard
+                    title="Find Hidden Risks"
+                    description="Automatically detect architectural and security issues."
+                    color="#F03E3F"
+                  />
                 </div>
-                <div className="snap-start h-[420px] flex items-center">
-                  <FeatureCard title="Plan Fixes Safely" description="Turn intent into clear, approval-ready repair plans." color="#375922"/>
+                <div className="snap-start h-[600px] flex items-center py-4">
+                  <FeatureCard
+                    title="Plan Fixes Safely"
+                    description="Turn intent into clear, approval-ready repair plans."
+                    color="#375922"
+                  />
                 </div>
-                <div className="snap-start h-[420px] flex items-center">
-                  <FeatureCard title="Apply & Verify" description="Fix code in a sandbox and re-check for risks." color="#736C2E"/>
+                <div className="snap-start h-[600px] flex items-center py-4">
+                  <FeatureCard
+                    title="Apply & Verify"
+                    description="Fix code in a sandbox and re-check for risks."
+                    color="#736C2E"
+                  />
                 </div>
-                <div className="snap-start h-[420px] flex items-center">
-                  <FeatureCard title="Explain the Changes" description="View diffs, graphs, and clear impact summaries." color="#2D4C8F"/>
+                <div className="snap-start h-[600px] flex items-center py-4">
+                  <FeatureCard
+                    title="Explain the Changes"
+                    description="View diffs, graphs, and clear impact summaries."
+                    color="#2D4C8F"
+                  />
                 </div>
               </div>
-              {/* Subtle scroll hint */}
+              
+              {/* "What We Offer" scroll hint */}
               {atTop && (
-                <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-[#D9D9D9] to-transparent flex items-end justify-center pb-2">
+                <div className="pointer-events-none absolute bottom-0 right-0 left-0 h-16 bg-gradient-to-t from-[#D9D9D9] to-transparent flex items-end justify-center pb-2">
                   <div className="flex flex-col items-center text-black/60 text-[13px] tracking-wide font-medium">
                     <span>What We Offer</span>
                     <span className="text-base leading-none">↓</span>
@@ -585,278 +754,23 @@ export default function FeaturesSection(){
               )}
             </div>
 
-            {/* RIGHT: Node graph preview (interactive mock) */}
-            <div className="relative bg-[#EFEFEF] rounded-xl border-2 border-dashed border-black/40 overflow-hidden h-[420px]">
-
-              {view !== "project" && (
-                <button
-                  onClick={() => setView(view === "system" ? "project" : "system")}
-                  className="absolute top-3 left-3 z-20 rounded-lg bg-white px-3 py-1 text-sm shadow"
-                >
-                  ←
-                </button>
-              )}
-
+            {/* RIGHT: Interactive graph */}
+            <div className="relative bg-gradient-to-br from-[#EFEFEF] to-[#E0E0E0] rounded-2xl border-3 border-black/30 overflow-hidden h-[600px] shadow-2xl">
               <ReactFlowProvider>
-                <ReactFlow
-                  nodes={graph.nodes}
-                  edges={graph.edges}
-                  fitView
-                  nodeTypes={{ default: ConditionalNode }}
-                  onNodeClick={(event, node) => {
-                    event.stopPropagation();
-                    // Drill-down navigation
-                    if (view === "project") {
-                      setView("system");
-                      return;
-                    }
-                    if (node.id === "frontend") {
-                      setView("frontend");
-                      return;
-                    }
-                    if (node.id === "backend") {
-                      setView("backend");
-                      return;
-                    }
-                    if (node.id === "database") {
-                      setView("database");
-                      return;
-                    }
-
-                    // Inspector logic: Only open inspector for real files
-                    const file = inspectorState[node.id];
-                    if (!file) {
-                      setSelectedNode(null);
-                      setActiveSection(null);
-                      return;
-                    }
-
-                    setSelectedNode({
-                      id: node.id,
-                      label: String(node.data?.label ?? node.id),
-                    });
-                    // auto-select first section
-                    setActiveSection(file.sections[0]?.id ?? null);
-                  }}
-                  onPaneClick={() => setSelectedNode(null)}
-                >
-                  <AutoFitOnChange view={view} />
-                  <Background gap={24} />
-                  <Controls />
-                </ReactFlow>
+                <GraphContent />
               </ReactFlowProvider>
-
-              {selectedNode && (
-                <div className="absolute top-0 right-0 h-full w-[260px] bg-white border-l border-black/20 p-4 z-30 overflow-y-auto">
-                  <div className="flex items-center justify-between mb-3">
-                    <div>
-                      <div className="text-sm font-semibold">
-                        {selectedNode.label}
-                      </div>
-                      <div className="text-[10px] text-black/60">
-                        {inspectorState[selectedNode.id]?.path}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setSelectedNode(null);
-                        setActiveSection(null);
-                      }}
-                      className="text-xs text-black/60 hover:text-black"
-                    >
-                      ✕
-                    </button>
-                  </div>
-
-                  {/* File Inspector for supported files */}
-                  {inspectorState[selectedNode.id] && (
-                    <>
-                      <div className="mb-3 text-xs font-semibold text-black/70">
-                        Sections
-                      </div>
-
-                      <div className="space-y-2 mb-4">
-                        {inspectorState[selectedNode.id].sections.map((section: any) => (
-                          <button
-                            key={section.id}
-                            onClick={() => setActiveSection(section.id)}
-                            className={`w-full text-left px-2 py-1 rounded text-xs border transition ${
-                              activeSection === section.id
-                                ? "bg-black text-white"
-                                : "bg-white hover:bg-black/10"
-                            }`}
-                          >
-                            {section.label}
-                          </button>
-                        ))}
-                      </div>
-
-                      {activeSection && (
-                        <div className="border-t pt-3">
-                          <div className="text-xs font-semibold mb-2">
-                            {inspectorState[selectedNode.id].sections.find(
-                              (s: any) => s.id === activeSection
-                            )?.label} Properties
-                          </div>
-
-                          <div className="space-y-3 text-[11px]">
-                            {Object.entries(
-                              inspectorState[selectedNode.id].sections.find(
-                                (s: any) => s.id === activeSection
-                              )?.props || {}
-                            ).map(([key, value]) => {
-
-                              // Background color editor
-                              if (key === "backgroundColor") {
-                                return (
-                                  <div key={key} className="space-y-1">
-                                    <label className="text-black/60 text-[11px]">
-                                      Background Color
-                                    </label>
-                                    <div className="flex items-center gap-2">
-                                      <input
-                                        type="color"
-                                        value={String(value)}
-                                        onChange={(e) => {
-                                          setInspectorState((prev) => ({
-                                            ...prev,
-                                            [selectedNode.id]: {
-                                              ...prev[selectedNode.id],
-                                              sections: prev[selectedNode.id].sections.map((s: any) =>
-                                                s.id === activeSection
-                                                  ? {
-                                                      ...s,
-                                                      props: {
-                                                        ...s.props,
-                                                        backgroundColor: e.target.value,
-                                                      },
-                                                    }
-                                                  : s
-                                              ),
-                                            },
-                                          }));
-                                        }}
-                                        className="h-6 w-6 border rounded"
-                                      />
-                                      <span className="text-[11px] font-medium">
-                                        {String(value)}
-                                      </span>
-                                    </div>
-                                  </div>
-                                );
-                              }
-
-                              // Alignment editor
-                              if (key === "alignment") {
-                                return (
-                                  <div key={key} className="space-y-1">
-                                    <label className="text-black/60 text-[11px]">
-                                      Alignment
-                                    </label>
-                                    <select
-                                      value={String(value)}
-                                      onChange={(e) => {
-                                        setInspectorState((prev) => ({
-                                          ...prev,
-                                          [selectedNode.id]: {
-                                            ...prev[selectedNode.id],
-                                            sections: prev[selectedNode.id].sections.map((s: any) =>
-                                              s.id === activeSection
-                                                ? {
-                                                    ...s,
-                                                    props: {
-                                                      ...s.props,
-                                                      alignment: e.target.value,
-                                                    },
-                                                  }
-                                                : s
-                                            ),
-                                          },
-                                        }));
-                                      }}
-                                      className="w-full border rounded px-1 py-[2px] text-[11px]"
-                                    >
-                                      <option value="left">Left</option>
-                                      <option value="center">Center</option>
-                                      <option value="right">Right</option>
-                                    </select>
-                                  </div>
-                                );
-                              }
-
-                              // Padding editor
-                              if (key === "padding") {
-                                return (
-                                  <div key={key} className="space-y-1">
-                                    <label className="text-black/60 text-[11px]">
-                                      Padding
-                                    </label>
-                                    <input
-                                      type="text"
-                                      value={String(value)}
-                                      onChange={(e) => {
-                                        setInspectorState((prev) => ({
-                                          ...prev,
-                                          [selectedNode.id]: {
-                                            ...prev[selectedNode.id],
-                                            sections: prev[selectedNode.id].sections.map((s: any) =>
-                                              s.id === activeSection
-                                                ? {
-                                                    ...s,
-                                                    props: {
-                                                      ...s.props,
-                                                      padding: e.target.value,
-                                                    },
-                                                  }
-                                                : s
-                                            ),
-                                          },
-                                        }));
-                                      }}
-                                      className="w-full border rounded px-1 py-[2px] text-[11px]"
-                                    />
-                                  </div>
-                                );
-                              }
-
-                              // Default read-only field
-                              return (
-                                <div key={key} className="flex justify-between">
-                                  <span className="text-black/60 text-[11px]">{key}</span>
-                                  <span className="font-medium text-[11px]">
-                                    {String(value)}
-                                  </span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-
             </div>
-
           </div>
         </div>
       </div>
+      
       <style jsx>{`
         .scrollbar-hide {
-          -ms-overflow-style: none; /* IE and Edge */
-          scrollbar-width: none; /* Firefox */
+          -ms-overflow-style: none;
+          scrollbar-width: none;
         }
         .scrollbar-hide::-webkit-scrollbar {
-          display: none; /* Chrome, Safari, Opera */
-        }
-        :global(.react-flow__node-default) {
-          background: transparent;
-          border: none;
-          box-shadow: none;
-        }
-        :global(.react-flow__node) {
-          padding: 0;
+          display: none;
         }
       `}</style>
     </section>
