@@ -22,6 +22,7 @@ model Project {
   repoSnapshots  RepoSnapshot[]
   graphSnapshots GraphSnapshot[]
   risks          Risk[]
+  plans Plan[]
 }
 
 model RepoSnapshot {
@@ -63,6 +64,7 @@ model GraphSnapshot {
   nodes Node[]
   edges Edge[]
   risks Risk[]
+  plans Plan[]
 }
 
 /**
@@ -155,4 +157,51 @@ model RiskOnNode {
 
   @@id([riskId, nodeId])
   @@index([nodeId])
+}
+enum PlanStatus {
+  DRAFT
+  APPROVED
+}
+
+enum PlanStepType {
+  REFACTOR
+  HARDEN
+  ADD_TESTS
+  CLEANUP
+  DOCS
+}
+
+model Plan {
+  id              String      @id @default(uuid())
+  projectId       String
+  graphSnapshotId String
+
+  prompt          String
+  selectedNodeIds Json
+  status          PlanStatus  @default(DRAFT)
+
+  createdAt       DateTime    @default(now())
+
+  steps           PlanStep[]
+
+  project         Project       @relation(fields: [projectId], references: [id])
+  graphSnapshot   GraphSnapshot  @relation(fields: [graphSnapshotId], references: [id])
+
+  @@index([projectId, createdAt])
+  @@index([graphSnapshotId])
+}
+
+model PlanStep {
+  id            String       @id @default(uuid())
+  planId        String
+  order         Int
+  type          PlanStepType
+  title         String
+  rationale     String?
+  targetNodeIds Json
+  meta          Json?
+
+  plan          Plan @relation(fields: [planId], references: [id])
+
+  @@index([planId, order])
 }

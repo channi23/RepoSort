@@ -9,6 +9,7 @@ import {IngestWorker} from './processors/ingest.worker';
 import {QUEUE_REGISTRY} from './queue.tokens';
 import {TestWorker} from './processors/test.worker';
 import {AnalyzeRepoWorker} from './processors/analyze-repo.worker';
+import {CreatePlanWorker} from './processors/create-plan.worker';
 @Global()
 @Module({
   imports: [ConfigModule,SandboxModule],
@@ -18,6 +19,7 @@ import {AnalyzeRepoWorker} from './processors/analyze-repo.worker';
     IngestWorker,
     BuildGraphWorker,
     AnalyzeRepoWorker,
+    CreatePlanWorker,
     {
       provide: QUEUE_REGISTRY,
       useFactory: () => {
