@@ -8,6 +8,7 @@ import { QUEUE_NAMES } from './queues/queue.names';
 import {IngestWorker} from './processors/ingest.worker';
 import {QUEUE_REGISTRY} from './queue.tokens';
 import {TestWorker} from './processors/test.worker';
+import {AnalyzeRepoWorker} from './processors/analyze-repo.worker';
 @Global()
 @Module({
   imports: [ConfigModule,SandboxModule],
@@ -16,6 +17,7 @@ import {TestWorker} from './processors/test.worker';
     TestWorker,
     IngestWorker,
     BuildGraphWorker,
+    AnalyzeRepoWorker,
     {
       provide: QUEUE_REGISTRY,
       useFactory: () => {
@@ -32,7 +34,7 @@ import {TestWorker} from './processors/test.worker';
 
           ingest: makeQueue(QUEUE_NAMES.INGEST_REPO),
           graph: makeQueue(QUEUE_NAMES.BUILD_GRAPH),
-          analyze: makeQueue(QUEUE_NAMES.ANALYZE_GRAPH),
+          analyze: makeQueue(QUEUE_NAMES.ANALYZE_REPO),
           plan: makeQueue(QUEUE_NAMES.CREATE_PLAN),
           apply: makeQueue(QUEUE_NAMES.APPLY_PLAN),
           verify: makeQueue(QUEUE_NAMES.VERIFY_RUN),

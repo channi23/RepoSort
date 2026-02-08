@@ -21,6 +21,7 @@ model Project {
 
   repoSnapshots  RepoSnapshot[]
   graphSnapshots GraphSnapshot[]
+  risks          Risk[]
 }
 
 model RepoSnapshot {
@@ -38,7 +39,7 @@ model RepoSnapshot {
   configJson      Json?
 
   project        Project         @relation(fields: [projectId], references: [id])
-  graphSnapshots GraphSnapshot[] // ✅ REQUIRED back-relation
+  graphSnapshots GraphSnapshot[]
 }
 
 /**
@@ -61,6 +62,7 @@ model GraphSnapshot {
 
   nodes Node[]
   edges Edge[]
+  risks Risk[]
 }
 
 /**
@@ -96,6 +98,7 @@ model Node {
   meta            Json?
 
   graphSnapshot GraphSnapshot @relation(fields: [graphSnapshotId], references: [id])
+  risks         RiskOnNode[]
 
   @@index([graphSnapshotId])
 }
@@ -111,4 +114,45 @@ model Edge {
   graphSnapshot GraphSnapshot @relation(fields: [graphSnapshotId], references: [id])
 
   @@index([graphSnapshotId])
+}
+
+enum RiskType {
+  STRUCTURAL
+  SECURITY
+}
+
+enum RiskSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model Risk {
+  id              String       @id @default(uuid())
+  projectId       String
+  graphSnapshotId String
+  type            RiskType
+  severity        RiskSeverity
+  title           String
+  description     String
+  ruleId          String?
+  meta            Json?
+  createdAt       DateTime     @default(now())
+
+  project       Project       @relation(fields: [projectId], references: [id])
+  graphSnapshot GraphSnapshot @relation(fields: [graphSnapshotId], references: [id])
+
+  nodes RiskOnNode[]
+}
+
+model RiskOnNode {
+  riskId String
+  nodeId String
+
+  risk Risk @relation(fields: [riskId], references: [id], onDelete: Cascade)
+  node Node @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@id([riskId, nodeId])
+  @@index([nodeId])
 }
