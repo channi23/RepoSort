@@ -16,6 +16,9 @@ export class StorageService{
     getRunRoot(projectId:string,runId:string){
         return path.join(this.root,projectId,runId);
     }
+    getProjectRoot(projectId:string){
+        return path.join(this.root, projectId);
+    }
     private ensureDir(dirPath:string){
         fs.mkdirSync(dirPath, {recursive:true});
     }
@@ -29,6 +32,30 @@ export class StorageService{
     }
     writeJson(projectId:string,runId:string,relativePath:string,obj:unknown){
         return this.writeText(projectId,runId,relativePath,JSON.stringify(obj,null,2));
+    }
+    listProjectArtifacts(projectId: string) {
+        const base = this.getProjectRoot(projectId);
+        if (!fs.existsSync(base)) return [];
+
+        const files: Array<{ path: string; size: number; modifiedAt: string }> = [];
+        const walk = (dirPath: string) => {
+            const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+            for (const entry of entries) {
+                const fullPath = path.join(dirPath, entry.name);
+                if (entry.isDirectory()) {
+                    walk(fullPath);
+                    continue;
+                }
+                const stat = fs.statSync(fullPath);
+                files.push({
+                    path: path.relative(base, fullPath),
+                    size: stat.size,
+                    modifiedAt: stat.mtime.toISOString(),
+                });
+            }
+        };
+        walk(base);
+        return files.sort((a, b) => a.path.localeCompare(b.path));
     }
 
 }

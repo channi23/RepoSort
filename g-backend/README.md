@@ -96,3 +96,27 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 ## License
 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+
+## Governance, Gemini, and Export
+
+Add these environment variables to enable Gemini and runtime paths:
+
+```bash
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-3-pro
+GEMINI_REQUIRED=true
+GEMINI_DEBUG_SOURCE=false
+SANDBOX_ROOT=../sandboxes
+ARTIFACTS_ROOT=../artifacts
+EXPORT_APPROVAL_RISK_THRESHOLD=5
+```
+
+Approvals flow:
+- Requests with policy decision `REQUIRE_APPROVAL` are stored in `ApprovalRequest` with `PENDING` status.
+- Admin can review via `GET /approvals?status=PENDING`.
+- Admin resumes via `POST /approvals/:id/approve` (re-enqueues from `CREATE_PLAN`) or blocks via `POST /approvals/:id/reject`.
+
+Export flow:
+- Trigger export: `POST /projects/:id/export?runId=<runId>`.
+- If risk threshold is exceeded, export returns `requiresApproval=true` and an `approvalId`.
+- List generated artifact files: `GET /projects/:id/artifacts`.

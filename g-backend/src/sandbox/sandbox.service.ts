@@ -47,9 +47,15 @@ export class SandboxService{
         this.ensureDir(repoPath);
         return repoPath;
     }
+    isCommandAllowed(cmd:string){
+        return this.allowedCmds.has(cmd);
+    }
+    getAllowedCommands(){
+        return [...this.allowedCmds.values()];
+    }
     private assertAllowed(cmd:string){
-        if(!this.allowedCmds.has(cmd)){
-            throw new Error(`Command now allwed in the sandbox: "${cmd}"`);
+        if(!this.isCommandAllowed(cmd)){
+            throw new Error(`Command not allowed in the sandbox: "${cmd}"`);
         }
     }
     async runCommand(opts:{
@@ -92,6 +98,5 @@ export class SandboxService{
     }
 
 }
-
 
 

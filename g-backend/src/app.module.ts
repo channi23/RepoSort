@@ -23,6 +23,7 @@ import { DiffsModule } from './modules/diffs/diffs.module';
 import { NodeActionModule } from './modules/node-action/node-action.module';
 import { GovernanceModule } from './modules/governance/governance.module';
 import { ArtifactsModule } from './modules/artifacts/artifacts.module';
+import { LlmModule } from './llm/llm.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { ArtifactsModule } from './modules/artifacts/artifacts.module';
     NodeActionModule,
     GovernanceModule,
     ArtifactsModule,
+    LlmModule,
   ],
   controllers: [AppController],
   providers: [AppService],

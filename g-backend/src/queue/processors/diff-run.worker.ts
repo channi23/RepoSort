@@ -4,6 +4,9 @@ import { PrismaService } from '../../db/prisma.service';
 import { StorageService } from '../../storage/storage.service';
 import { QUEUE_NAMES } from '../queues/queue.names';
 import { NodeType, EdgeType } from '@prisma/client';
+import { AuditService } from '../../modules/governance/audit.service';
+import { GeminiService } from '../../llm/gemini.service';
+import { GeminiRunnerService } from '../../llm/gemini-runner.service';
 
 type DiffJob = { runId: string; traceId?: string };
 
@@ -18,6 +21,9 @@ export class DiffRunWorker implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly audit: AuditService,
+    private readonly gemini: GeminiService,
+    private readonly geminiRunner: GeminiRunnerService,
   ) {}
 
   async onModuleInit() {
@@ -25,10 +31,19 @@ export class DiffRunWorker implements OnModuleInit, OnModuleDestroy {
       QUEUE_NAMES.DIFF_RUN,
       async (job: Job<DiffJob>) => {
         const { runId, traceId } = job.data;
-        this.logger.log(`[traceId=${traceId}] diff start run=${runId}`);
+        this.logger.log(`[traceId=${traceId}] [step=DIFF] start run=${runId}`);
 
         const run = await this.prisma.run.findUnique({ where: { id: runId } });
         if (!run) throw new Error(`Run not found: ${runId}`);
+        await this.audit.log({
+          projectId: run.projectId,
+          traceId,
+          actorRole: 'system',
+          action: 'worker.diff.start',
+          entityType: 'Run',
+          entityId: runId,
+          decision: 'ALLOW',
+        });
 
         const existingDiff = await this.prisma.diffReport.findUnique({
           where: { runId },
@@ -41,6 +56,19 @@ export class DiffRunWorker implements OnModuleInit, OnModuleDestroy {
 
         const verification = await this.prisma.verificationReport.findUnique({ where: { runId } });
         if (!verification) throw new Error(`VerificationReport not found for run=${runId} (Stage 6 required)`);
+        if (verification.projectId !== run.projectId) {
+          await this.audit.log({
+            projectId: run.projectId,
+            traceId,
+            actorRole: 'system',
+            action: 'worker.diff.scope',
+            entityType: 'VerificationReport',
+            entityId: verification.id,
+            decision: 'DENY',
+            meta: { reason: 'verification project mismatch' },
+          });
+          throw new Error(`Cross-project scope mismatch for verification run=${runId}`);
+        }
 
         // BEFORE graph: latest graph snapshot for this repoSnapshot
         const beforeGraph = await this.prisma.graphSnapshot.findFirst({
@@ -54,6 +82,19 @@ export class DiffRunWorker implements OnModuleInit, OnModuleDestroy {
           where: { id: verification.graphSnapshotId },
         });
         if (!afterGraph) throw new Error(`After GraphSnapshot not found id=${verification.graphSnapshotId}`);
+        if (afterGraph.projectId !== run.projectId || beforeGraph.projectId !== run.projectId) {
+          await this.audit.log({
+            projectId: run.projectId,
+            traceId,
+            actorRole: 'system',
+            action: 'worker.diff.scope',
+            entityType: 'GraphSnapshot',
+            entityId: verification.graphSnapshotId,
+            decision: 'DENY',
+            meta: { reason: 'graph project mismatch' },
+          });
+          throw new Error(`Cross-project scope mismatch for run=${runId}`);
+        }
 
         const [beforeNodes, afterNodes, beforeEdges, afterEdges] = await Promise.all([
           this.prisma.node.findMany({ where: { graphSnapshotId: beforeGraph.id } }),
@@ -107,6 +148,37 @@ export class DiffRunWorker implements OnModuleInit, OnModuleDestroy {
 
         const riskDelta = afterRiskCount - beforeRiskCount;
 
+        const narrativeAttr = await this.geminiRunner.runWithGeminiFirst<{ narrative: string }>({
+          stepName: 'DIFF',
+          traceId,
+          projectId: run.projectId,
+          runId,
+          geminiFn: async () => {
+            this.gemini.assertConfigured();
+            const narrative = await this.gemini.generateText(
+              [
+                'Write a concise semantic diff narrative.',
+                'Mention major code graph and risk changes in 2-4 sentences.',
+              ].join('\n'),
+              JSON.stringify({
+                nodesAdded: nodesAdded.length,
+                nodesRemoved: nodesRemoved.length,
+                edgesAdded: edgesAdded.length,
+                edgesRemoved: edgesRemoved.length,
+                beforeRiskCount,
+                afterRiskCount,
+                riskDelta,
+              }),
+              16_000,
+            );
+            if (!narrative) throw new Error('Gemini narrative unavailable');
+            return { narrative: narrative.slice(0, 1_000) };
+          },
+          fallbackFn: async () => ({
+            narrative: `Semantic diff generated. nodes(+${nodesAdded.length}/-${nodesRemoved.length}), edges(+${edgesAdded.length}/-${edgesRemoved.length}), riskDelta=${riskDelta}.`,
+          }),
+        });
+
         const report = {
           runId,
           projectId: run.projectId,
@@ -135,6 +207,7 @@ export class DiffRunWorker implements OnModuleInit, OnModuleDestroy {
             edgesAdded: edgesAdded.slice(0, 25),
             edgesRemoved: edgesRemoved.slice(0, 25),
           },
+          narrative: narrativeAttr.value.narrative,
           generatedAt: new Date().toISOString(),
         };
 
@@ -176,8 +249,18 @@ export class DiffRunWorker implements OnModuleInit, OnModuleDestroy {
         });
 
         this.logger.log(
-          `[traceId=${traceId}] diff done run=${runId} nodes(+${nodesAdded.length}/-${nodesRemoved.length}) edges(+${edgesAdded.length}/-${edgesRemoved.length}) riskDelta=${riskDelta}`,
+          `[traceId=${traceId}] [step=DIFF] done [source=${narrativeAttr.source}] model=${narrativeAttr.model ?? 'n/a'} latencyMs=${narrativeAttr.latencyMs} run=${runId} nodes(+${nodesAdded.length}/-${nodesRemoved.length}) edges(+${edgesAdded.length}/-${edgesRemoved.length}) riskDelta=${riskDelta}`,
         );
+        await this.audit.log({
+          projectId: run.projectId,
+          traceId,
+          actorRole: 'system',
+          action: 'worker.diff.done',
+          entityType: 'Run',
+          entityId: runId,
+          decision: 'ALLOW',
+          meta: { riskDelta, source: narrativeAttr.source, latencyMs: narrativeAttr.latencyMs },
+        });
 
         // Stage 8 chaining: finalize NodeAction for this run (if one exists)
         try {
@@ -214,6 +297,19 @@ export class DiffRunWorker implements OnModuleInit, OnModuleDestroy {
       if (!runId) return;
 
       try {
+        const run = await this.prisma.run.findUnique({ where: { id: runId }, select: { projectId: true } });
+        if (run) {
+          await this.audit.log({
+            projectId: run.projectId,
+            traceId,
+            actorRole: 'system',
+            action: 'worker.diff.failed',
+            entityType: 'Run',
+            entityId: runId,
+            decision: 'DENY',
+            meta: { error: err?.message ?? String(err) },
+          });
+        }
         await this.prisma.nodeAction.updateMany({
           where: { runId },
           data: { status: 'FAILED', error: err?.message ?? String(err) },

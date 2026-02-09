@@ -27,6 +27,9 @@ model Project {
   verifications VerificationReport[]
   diffReports DiffReport[]
   NodeAction     NodeAction[]
+  approvals      ApprovalRequest[]
+  auditLogs      AuditLog[]
+  stepExecutions StepExecution[]
 }
 
 model RepoSnapshot {
@@ -313,9 +316,38 @@ enum NodeActionType {
 
 enum NodeActionStatus {
   QUEUED
+  PENDING_APPROVAL
   RUNNING
   SUCCEEDED
   FAILED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum PolicyDecision {
+  ALLOW
+  REQUIRE_APPROVAL
+  DENY
+}
+
+enum ExecutionSource {
+  GEMINI
+  FALLBACK
+}
+
+enum StepName {
+  INGEST
+  BUILD_GRAPH
+  ANALYZE
+  CREATE_PLAN
+  APPLY_PLAN
+  VERIFY
+  DIFF
+  EXPORT
 }
 
 model NodeAction {
@@ -340,4 +372,65 @@ model NodeAction {
   updatedAt      DateTime @updatedAt
 
   project       Project @relation(fields: [projectId], references: [id])
+  approvals     ApprovalRequest[]
+}
+
+model ApprovalRequest {
+  id            String         @id @default(uuid())
+  projectId     String
+  nodeActionId  String?
+  planId        String?
+  runId         String?
+  status        ApprovalStatus @default(PENDING)
+  createdAt     DateTime       @default(now())
+  decidedAt     DateTime?
+  decidedByRole String?
+  reasons       Json
+
+  project       Project        @relation(fields: [projectId], references: [id])
+  nodeAction    NodeAction?    @relation(fields: [nodeActionId], references: [id])
+
+  @@index([projectId, status, createdAt])
+  @@index([nodeActionId])
+  @@index([planId])
+  @@index([runId])
+}
+
+model AuditLog {
+  id         String         @id @default(uuid())
+  projectId  String
+  traceId    String?
+  actorRole  String
+  action     String
+  entityType String
+  entityId   String
+  decision   PolicyDecision
+  meta       Json?
+  createdAt  DateTime       @default(now())
+
+  project    Project        @relation(fields: [projectId], references: [id])
+
+  @@index([projectId, createdAt])
+  @@index([entityType, entityId])
+}
+
+model StepExecution {
+  id           String          @id @default(uuid())
+  projectId    String
+  runId        String?
+  nodeActionId String?
+  stepName     StepName
+  source       ExecutionSource
+  model        String?
+  latencyMs    Int
+  success      Boolean
+  error        String?
+  createdAt    DateTime        @default(now())
+
+  project      Project         @relation(fields: [projectId], references: [id])
+
+  @@index([projectId, createdAt])
+  @@index([runId, createdAt])
+  @@index([nodeActionId, createdAt])
+  @@index([stepName, createdAt])
 }

@@ -16,6 +16,7 @@ import { QUEUE_REGISTRY } from '../../queue/queue.tokens';
 import { QUEUE_NAMES } from '../../queue/queues/queue.names';
 import { CreatePlanDto } from './dto/create-plan.dto';
 import { PlanningService } from './planning.service';
+import { Roles } from '../governance/roles.decorator';
 
 @Controller()
 export class PlanningController {
@@ -88,6 +89,7 @@ export class PlanningController {
 
   // OPTIONAL: POST /plans/:planId/approve
   @Post('plans/:planId/approve')
+  @Roles('admin')
   async approve(@Param('planId') planId: string, @Req() req: Request) {
     const traceId = (req as any).traceId;
     const plan = await this.planning.approvePlan(planId);

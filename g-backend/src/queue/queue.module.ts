@@ -14,9 +14,11 @@ import {CreatePlanWorker} from './processors/create-plan.worker';
 import {ApplyPlanWorker} from './processors/apply-plan.worker';
 import {VerifyRunWorker} from './processors/verify-run.worker';
 import {DiffRunWorker} from './processors/diff-run.worker';
+import { ExportArtifactsWorker } from './processors/export-artifacts.worker';
+import { LlmModule } from '../llm/llm.module';
 @Global()
 @Module({
-  imports: [ConfigModule,SandboxModule,StorageModule],
+  imports: [ConfigModule,SandboxModule,StorageModule, LlmModule],
   controllers: [QueueTestController],
   providers: [
     TestWorker,
@@ -27,6 +29,7 @@ import {DiffRunWorker} from './processors/diff-run.worker';
     ApplyPlanWorker,
     VerifyRunWorker,
     DiffRunWorker,
+    ExportArtifactsWorker,
     {
       provide: QUEUE_REGISTRY,
       useFactory: () => {
@@ -48,7 +51,7 @@ import {DiffRunWorker} from './processors/diff-run.worker';
           apply: makeQueue(QUEUE_NAMES.APPLY_PLAN),
           verify: makeQueue(QUEUE_NAMES.VERIFY_RUN),
           diff: makeQueue(QUEUE_NAMES.DIFF_RUN),
-          export: makeQueue(QUEUE_NAMES.VERIFY_ARTIFACTS),
+          export: makeQueue(QUEUE_NAMES.EXPORT_ARTIFACTS),
         };
       },
     },
