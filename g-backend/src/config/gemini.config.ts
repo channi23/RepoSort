@@ -16,7 +16,7 @@ export const getGeminiConfig = (): GeminiConfig => {
   if (cached) return cached;
   cached = {
     apiKey: process.env.GEMINI_API_KEY?.trim() || '',
-    model: process.env.GEMINI_MODEL?.trim() || 'gemini-3-pro',
+    model: process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash',
     required: parseBool(process.env.GEMINI_REQUIRED, true),
     debugSource: parseBool(process.env.GEMINI_DEBUG_SOURCE, false),
   };

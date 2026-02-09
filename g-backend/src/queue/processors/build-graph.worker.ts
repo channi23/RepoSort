@@ -21,7 +21,7 @@ export class BuildGraphWorker implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly gemini: GeminiService,
     private readonly geminiRunner: GeminiRunnerService,
-  ) {}
+  ) { }
 
   async onModuleInit() {
     this.worker = new Worker(
@@ -79,84 +79,102 @@ export class BuildGraphWorker implements OnModuleInit, OnModuleDestroy {
     let nodeCount = 1;
     let edgeCount = 0;
 
-    const walk = async (dirPath: string, parentNodeId: string) => {
+    const nodesToCreate: any[] = [];
+    const edgesToCreate: any[] = [];
+
+    const walk = async (dirPath: string, parentNodeId: string, currentPath: string) => {
       const entries = fs.readdirSync(dirPath, { withFileTypes: true });
 
       for (const entry of entries) {
-        if (entry.name === '.git' || entry.name === 'node_modules') continue;
+        if (
+          entry.name === '.git' ||
+          entry.name === 'node_modules' ||
+          entry.name === 'dist' ||
+          entry.name === 'build' ||
+          entry.name === '.next' ||
+          entry.name === '.venv' ||
+          entry.name === 'target' ||
+          entry.name === 'vendor' ||
+          entry.name === 'out' ||
+          entry.name === '__pycache__'
+        )
+          continue;
 
         const fullPath = path.join(dirPath, entry.name);
         const relPath = path.relative(repoRoot, fullPath);
+        const nodeId = crypto.randomUUID();
 
         if (entry.isDirectory()) {
           const hintType = hints.typeByPath?.[relPath];
           const nodeType = hintType && ['DIR', 'MODULE', 'SERVICE', 'CONFIG'].includes(hintType) ? hintType : 'DIR';
-          const dirNode = await this.prisma.node.create({
-            data: {
-              graphSnapshotId: graph.id,
-              type: nodeType as any,
-              label: hints.labelByPath?.[relPath] || entry.name,
-              path: relPath,
-            },
+
+          nodesToCreate.push({
+            id: nodeId,
+            graphSnapshotId: graph.id,
+            type: nodeType as any,
+            label: hints.labelByPath?.[relPath] || entry.name,
+            path: relPath,
           });
 
-          await this.prisma.edge.create({
-            data: {
-              graphSnapshotId: graph.id,
-              type: 'CONTAINS',
-              fromNodeId: parentNodeId,
-              toNodeId: dirNode.id,
-            },
+          edgesToCreate.push({
+            graphSnapshotId: graph.id,
+            type: 'CONTAINS',
+            fromNodeId: parentNodeId,
+            toNodeId: nodeId,
           });
 
-          nodeCount++;
-          edgeCount++;
-
-          await walk(fullPath, dirNode.id);
-        }
-
-        if (entry.isFile()) {
+          await walk(fullPath, nodeId, relPath);
+        } else if (entry.isFile()) {
           const hintType = hints.typeByPath?.[relPath];
           const nodeType = hintType && ['FILE', 'MODULE', 'SERVICE', 'CONFIG'].includes(hintType) ? hintType : 'FILE';
-          const fileNode = await this.prisma.node.create({
-            data: {
-              graphSnapshotId: graph.id,
-              type: nodeType as any,
-              label: hints.labelByPath?.[relPath] || entry.name,
-              path: relPath,
-            },
+
+          nodesToCreate.push({
+            id: nodeId,
+            graphSnapshotId: graph.id,
+            type: nodeType as any,
+            label: hints.labelByPath?.[relPath] || entry.name,
+            path: relPath,
           });
 
-          await this.prisma.edge.create({
-            data: {
-              graphSnapshotId: graph.id,
-              type: 'CONTAINS',
-              fromNodeId: parentNodeId,
-              toNodeId: fileNode.id,
-            },
+          edgesToCreate.push({
+            graphSnapshotId: graph.id,
+            type: 'CONTAINS',
+            fromNodeId: parentNodeId,
+            toNodeId: nodeId,
           });
-
-          nodeCount++;
-          edgeCount++;
         }
       }
     };
 
-    await walk(repoRoot, projectNode.id);
+    const crypto = require('crypto');
+    await walk(repoRoot, projectNode.id, '');
+
+    // Batch creation
+    if (nodesToCreate.length > 0) {
+      this.logger.log(`[traceId=${traceId}] batch creating ${nodesToCreate.length} nodes...`);
+      await this.prisma.node.createMany({ data: nodesToCreate });
+    }
+    if (edgesToCreate.length > 0) {
+      this.logger.log(`[traceId=${traceId}] batch creating ${edgesToCreate.length} edges...`);
+      await this.prisma.edge.createMany({ data: edgesToCreate });
+    }
+
+    const totalNodes = nodesToCreate.length + 1;
+    const totalEdges = edgesToCreate.length;
 
     await this.prisma.graphSnapshot.update({
       where: { id: graph.id },
       data: {
-        nodeCount,
-        edgeCount,
+        nodeCount: totalNodes,
+        edgeCount: totalEdges,
       },
     });
 
     this.logger.log(
-      `[traceId=${traceId}] [step=BUILD_GRAPH] done [source=${hintsAttr.source}] model=${hintsAttr.model ?? 'n/a'} latencyMs=${hintsAttr.latencyMs} graphSnapshotId=${graph.id} nodes=${nodeCount} edges=${edgeCount}`,
+      `[traceId=${traceId}] [step=BUILD_GRAPH] done [source=${hintsAttr.source}] model=${hintsAttr.model ?? 'n/a'} latencyMs=${hintsAttr.latencyMs} graphSnapshotId=${graph.id} nodes=${totalNodes} edges=${totalEdges}`,
     );
 
-    return { graphSnapshotId: graph.id, nodeCount, edgeCount };
+    return { graphSnapshotId: graph.id, nodeCount: totalNodes, edgeCount: totalEdges };
   }
 
   private async getGraphHintsWithGemini(repoRoot: string): Promise<GraphHints> {

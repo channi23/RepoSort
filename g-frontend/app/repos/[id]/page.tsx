@@ -1,13 +1,28 @@
 "use client";
-import Navbar from "@/components/AuthNavbar";
-import { useState, use, useEffect, useRef } from "react";
-import ReactFlow, { Background, Controls } from "reactflow";
+import Navbar from "@/components/Navbar";
+import RiskPanel, { Risk } from "@/components/RiskPanel"; // Import RiskPanel
+import React, { useState, use, useEffect, useRef } from "react";
+import ReactFlow, { Background, Controls, ReactFlowProvider, applyNodeChanges, applyEdgeChanges, OnNodesChange, OnEdgesChange } from "reactflow";
 import "reactflow/dist/style.css";
+import IndustrialNode from "@/components/IndustrialNode";
+import NodeInspector from "@/components/NodeInspector";
+
+const nodeTypes = {
+  PROJECT: IndustrialNode,
+  DIR: IndustrialNode,
+  FILE: IndustrialNode,
+  MODULE: IndustrialNode,
+  SERVICE: IndustrialNode,
+  CONFIG: IndustrialNode,
+};
+
 export default function RepoSortingPage({
   params,
-}: {params:Promise<{id:string}>;
+}: {
+  params: Promise<{ id: string }>;
 }) {
-  const {id}=use(params);
+  const { id } = use(params);
+  const projectId = id; // Assuming ID in URL is project ID for now
   const [showChat, setShowChat] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [nodes, setNodes] = useState<any[]>([]);
@@ -19,10 +34,22 @@ export default function RepoSortingPage({
     Record<string, { label: string; description: string }>
   >({});
 
+  // AI & Risk State
+  const [risks, setRisks] = useState<Risk[]>([]);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisStep, setAnalysisStep] = useState<"IDLE" | "INGESTING" | "BUILDING" | "ANALYZING" | "FIXING">("IDLE");
+  const [highlightedRiskNodes, setHighlightedRiskNodes] = useState<string[] | null>(null);
+  const [currGraphSnapshotId, setCurrGraphSnapshotId] = useState<string | null>(null);
+  const [hasScanned, setHasScanned] = useState(false);
+
   // Undo/Redo history state
   const [history, setHistory] = useState<any[]>([]);
   const [future, setFuture] = useState<any[]>([]);
   const [isBatching, setIsBatching] = useState(false);
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'agent'; text: string }[]>([
+    { role: 'agent', text: 'Agent is monitoring repository structure. Ask me anything about dependencies or risks.' }
+  ]);
+  const [isAgentThinking, setIsAgentThinking] = useState(false);
 
   // Refs to track current state for pushHistory (avoid stale closures)
   const nodesRef = useRef<any[]>([]);
@@ -113,6 +140,13 @@ export default function RepoSortingPage({
     ],
   };
 
+  const steps = [
+    { id: "INGESTING", label: "INGESTING" },
+    { id: "BUILDING", label: "BUILDING" },
+    { id: "ANALYZING", label: "ANALYZING" },
+    { id: "FIXING", label: "FIXING" },
+  ];
+
   // Helper: collect all descendant node ids (including root)
   const collectSubtreeIds = (rootId: string): string[] => {
     const result = new Set<string>();
@@ -192,9 +226,20 @@ export default function RepoSortingPage({
           ...n.data,
           label: nodeMeta[n.id]?.label ?? n.data.label,
         },
+        style: highlightedRiskNodes?.includes(n.id)
+          ? { border: '2px solid #ef4444', boxShadow: '0 0 10px rgba(239, 68, 68, 0.5)' }
+          : undefined
       }))
     );
-  }, [nodeMeta]);
+  }, [nodeMeta, highlightedRiskNodes]);
+
+  const onNodesChange: OnNodesChange = (changes) => {
+    setNodes((nds) => applyNodeChanges(changes, nds));
+  };
+
+  const onEdgesChange: OnEdgesChange = (changes) => {
+    setEdges((eds) => applyEdgeChanges(changes, eds));
+  };
 
   const toggleExpand = (id: string) => {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -259,7 +304,14 @@ export default function RepoSortingPage({
     setEdges((prev) => {
       const newEdges = [
         ...prev,
-        { id: `${from}-${to}-${Date.now()}`, source: from, target: to },
+        {
+          id: `${from}-${to}-${Date.now()}`,
+          source: from,
+          target: to,
+          label: "CONTAINS",
+          style: { stroke: '#000', strokeWidth: 3 },
+          animated: false,
+        },
       ];
       edgesRef.current = newEdges;
       return newEdges;
@@ -400,84 +452,301 @@ export default function RepoSortingPage({
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  const runAgentCommand = (input: string) => {
-    const text = input.toLowerCase().trim();
+  // Initial Load: Check if project already has a graph/risks
+  useEffect(() => {
+    const initLoad = async () => {
+      try {
+        const res = await fetch(`http://localhost:3000/projects/${projectId}/graph`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.graphSnapshotId) {
+            setCurrGraphSnapshotId(data.graphSnapshotId);
+            setHasScanned(true);
 
-    if (text.includes("frontend")) addNode("frontend", "Frontend");
-    if (text.includes("backend")) addNode("backend", "Backend");
-    if (text.includes("database")) addNode("database", "Database");
+            if (data.nodes) {
+              const laidOutNodes = data.nodes.map((n: any, i: number) => ({
+                ...n,
+                position: (n.position?.x === 0 && n.position?.y === 0)
+                  ? { x: (i % 6) * 280, y: Math.floor(i / 6) * 220 }
+                  : n.position
+              }));
+              setNodes(laidOutNodes);
+            }
+            if (data.edges) setEdges(data.edges);
 
-    if (text.includes("connect")) {
-      if (text.includes("frontend") && text.includes("backend"))
-        connectNodes("frontend", "backend");
-      if (text.includes("backend") && text.includes("database"))
-        connectNodes("backend", "database");
-      if (text.includes("frontend") && text.includes("database"))
-        connectNodes("frontend", "database");
+            // Fetch risks too
+            const risksRes = await fetch(`http://localhost:3000/projects/${projectId}/risks`);
+            if (risksRes.ok) {
+              const rData = await risksRes.json();
+              const rList = Array.isArray(rData) ? rData : (rData.risks || []);
+              setRisks(rList.map((r: any) => ({
+                id: r.id,
+                type: r.type,
+                severity: r.severity,
+                title: r.title,
+                description: r.description,
+                ruleId: r.ruleId,
+                nodeIds: r.nodeIds || (r.nodes?.map((n: any) => n.nodeId)) || [],
+              })));
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Initial load failed", e);
+      }
+    };
+    initLoad();
+  }, [projectId]);
+
+  // --- API Integrations ---
+
+  const handleAnalyzeFn = async () => {
+    setIsAnalyzing(true);
+    setAnalysisStep("INGESTING");
+    try {
+      // 1. Ensure Repo Snapshot exists (Ingestion check)
+      let repoSnapshotId = null;
+      let graphSnapshotId = null;
+      let checkAttempts = 0;
+
+      while (!repoSnapshotId && checkAttempts < 20) {
+        // We check for graph first as it's the end goal
+        const res = await fetch(`http://localhost:3000/projects/${projectId}/graph`);
+        if (res.ok) {
+          const data = await res.json();
+          graphSnapshotId = data.graphSnapshotId;
+          setCurrGraphSnapshotId(graphSnapshotId);
+          // If graph exists, we don't need to check repo snapshot
+          if (graphSnapshotId) {
+            if (data.nodes) {
+              const laidOutNodes = data.nodes.map((n: any, i: number) => ({
+                ...n,
+                position: (n.position?.x === 0 && n.position?.y === 0)
+                  ? { x: (i % 6) * 280, y: Math.floor(i / 6) * 220 }
+                  : n.position
+              }));
+              setNodes(laidOutNodes);
+            }
+            if (data.edges) setEdges(data.edges);
+            break;
+          }
+        }
+
+        // If no graph, check if we at least have a repo snapshot to build from
+        // We don't have a direct endpoint for repo snapshot list usually, 
+        // but we can try the build endpoint and see if it gives a 404 or something else
+        // Actually, let's keep it simple: try to build. If 404, we are still ingesting.
+        const buildCheck = await fetch(`http://localhost:3000/projects/${projectId}/graph/build`, {
+          method: "POST",
+        });
+
+        if (buildCheck.ok) {
+          const buildData = await buildCheck.json();
+          repoSnapshotId = buildData.repoSnapshotId;
+          break;
+        }
+
+        if (buildCheck.status === 404) {
+          // Still ingesting...
+          console.log("Still ingesting or no snapshot yet...");
+          await new Promise(r => setTimeout(r, 3000));
+          checkAttempts++;
+          continue;
+        }
+
+        throw new Error("Failed to communicate with ingestion service");
+      }
+
+      if (!graphSnapshotId && !repoSnapshotId) {
+        throw new Error("Ingestion is taking longer than expected. Please try again in a moment.");
+      }
+
+      // 2. If we have a repo snapshot but still no graph, poll for graph build completion
+      if (!graphSnapshotId && repoSnapshotId) {
+        setAnalysisStep("BUILDING");
+        let buildAttempts = 0;
+        // Increase to 100 attempts (300 seconds) for larger repos
+        while (!graphSnapshotId && buildAttempts < 100) {
+          await new Promise(r => setTimeout(r, 3000));
+          const checkRes = await fetch(`http://localhost:3000/projects/${projectId}/graph`);
+          if (checkRes.ok) {
+            const checkData = await checkRes.json();
+            graphSnapshotId = checkData.graphSnapshotId;
+            setCurrGraphSnapshotId(graphSnapshotId);
+            if (checkData.nodes) {
+              // Apply simple grid layout to avoid (0,0) stacking
+              const laidOutNodes = checkData.nodes.map((n: any, i: number) => ({
+                ...n,
+                position: (n.position?.x === 0 && n.position?.y === 0)
+                  ? { x: (i % 6) * 280, y: Math.floor(i / 6) * 220 }
+                  : n.position
+              }));
+              setNodes(laidOutNodes);
+            }
+            if (checkData.edges) setEdges(checkData.edges);
+          }
+          buildAttempts++;
+        }
+      }
+
+      if (!graphSnapshotId) throw new Error("Graph building timed out.");
+
+      setAnalysisStep("ANALYZING");
+
+      // 3. Trigger Analysis
+      const analyzeRes = await fetch(`http://localhost:3000/projects/${projectId}/analyze`, {
+        method: "POST",
+      });
+      if (!analyzeRes.ok) throw new Error("Failed to start analysis");
+
+      // 4. Poll for Risks
+      const pollInterval = setInterval(async () => {
+        try {
+          const risksRes = await fetch(`http://localhost:3000/projects/${projectId}/risks`);
+          if (risksRes.ok) {
+            const data = await risksRes.json();
+            // Backend returns { graphSnapshotId, risks: [...] }
+            const riskList = Array.isArray(data) ? data : (data.risks || []);
+
+            if (data.graphSnapshotId) {
+              const mappedRisks: Risk[] = riskList.map((r: any) => ({
+                id: r.id,
+                type: r.type,
+                severity: r.severity,
+                title: r.title,
+                description: r.description,
+                ruleId: r.ruleId,
+                nodeIds: r.nodeIds || (r.nodes?.map((n: any) => n.nodeId)) || [],
+              }));
+
+              setRisks(mappedRisks);
+              setIsAnalyzing(false);
+              setAnalysisStep("IDLE");
+              setHasScanned(true);
+              clearInterval(pollInterval);
+            }
+          }
+        } catch (e) {
+          console.error("Polling error", e);
+        }
+      }, 3000);
+
+      // Stop polling after 120 seconds if no result
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        setIsAnalyzing((prev) => {
+          if (prev) {
+            setAnalysisStep("IDLE");
+            return false;
+          }
+          return prev;
+        });
+      }, 120000);
+
+    } catch (err) {
+      console.error(err);
+      setIsAnalyzing(false);
+      setAnalysisStep("IDLE");
+      alert(err instanceof Error ? err.message : "Failed to analyze repository.");
     }
+  };
 
-    if (text.startsWith("rename")) {
-      const match = text.match(/rename\s+(\w+)\s+to\s+(.+)/);
-      if (match) renameNode(match[1], match[2].trim());
-    }
+  const handleFixRisk = async (risk: Risk) => {
+    if (!currGraphSnapshotId) return;
 
-    if (text.startsWith("describe")) {
-      // examples:
-      // "describe backend as auth layer"
-      // "describe database as postgres storage"
-      const match = text.match(/describe\s+(\w+)\s+as\s+(.+)/);
-      if (match) {
-        const [, target, description] = match;
-        setNodeMeta((prev) =>
-          prev[target]
-            ? {
-                ...prev,
-                [target]: {
-                  ...prev[target],
-                  description: description.trim(),
-                },
+    setIsAnalyzing(true);
+    setAnalysisStep("FIXING");
+
+    try {
+      const res = await fetch(`http://localhost:3000/node-actions/refactor`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          graphSnapshotId: currGraphSnapshotId,
+          selectedNodeIds: risk.nodeIds,
+          prompt: `Fix risk: ${risk.title}. ${risk.description}`,
+        }),
+      });
+
+      if (!res.ok) throw new Error("Failed to start AI fix");
+
+      const actionData = await res.json();
+      const nodeActionId = actionData.nodeActionId;
+
+      // Poll for completion
+      const pollInterval = setInterval(async () => {
+        const statusRes = await fetch(`http://localhost:3000/node-actions/${nodeActionId}`);
+        if (statusRes.ok) {
+          const statusData = await statusRes.json();
+          if (statusData.status === "SUCCEEDED" || statusData.status === "FAILED") {
+            clearInterval(pollInterval);
+            setIsAnalyzing(false);
+            setAnalysisStep("IDLE");
+            if (statusData.status === "FAILED") {
+              alert(`AI Fix failed: ${statusData.error || "Unknown error"}`);
+            } else {
+              // Refresh risks after fix
+              const updatedRisksRes = await fetch(`http://localhost:3000/projects/${projectId}/risks`);
+              if (updatedRisksRes.ok) {
+                const updatedData = await updatedRisksRes.json();
+                const riskList = Array.isArray(updatedData) ? updatedData : (updatedData.risks || []);
+                setRisks(riskList.map((r: any) => ({
+                  id: r.id,
+                  type: r.type,
+                  severity: r.severity,
+                  title: r.title,
+                  description: r.description,
+                  ruleId: r.ruleId,
+                  nodeIds: r.nodeIds || (r.nodes?.map((n: any) => n.nodeId)) || [],
+                })));
               }
-            : prev
-        );
-      }
-    }
-
-    if (text.startsWith("expand")) {
-      // examples:
-      // "expand frontend"
-      // "expand backend"
-      const match = text.match(/expand\s+(\w+)/);
-      if (match) {
-        const [, target] = match;
-        if (SUBGRAPHS[target] && !expanded[target]) {
-          expandSubgraph(target);
-          toggleExpand(target);
+            }
+          }
         }
-      }
-    }
+      }, 3000);
 
-    if (text.startsWith("collapse")) {
-      // examples:
-      // "collapse frontend"
-      // "collapse backend"
-      const match = text.match(/collapse\s+(\w+)/);
-      if (match) {
-        const [, target] = match;
-        if (SUBGRAPHS[target] && expanded[target]) {
-          collapseSubgraph(target);
-          toggleExpand(target);
-        }
-      }
+    } catch (err) {
+      console.error(err);
+      setIsAnalyzing(false);
+      setAnalysisStep("IDLE");
+      alert("Failed to trigger AI fix.");
     }
-    if (text.startsWith("remove") || text.startsWith("delete")) {
-      // examples:
-      // "remove database"
-      // "delete frontend"
-      const match = text.match(/(remove|delete)\s+(\w+)/);
-      if (match) {
-        const [, , target] = match;
-        removeNode(target);
+  };
+
+  const runAgentCommand = async (input: string) => {
+    const text = input.trim();
+    if (!text) return;
+
+    // 1. Add user message
+    setChatMessages(prev => [...prev, { role: 'user', text }]);
+    setIsAgentThinking(true);
+
+    try {
+      // 2. Call backend
+      const res = await fetch('http://localhost:3000/agent/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, prompt: text }),
+      });
+
+      if (!res.ok) throw new Error("Agent connection failed");
+      const data = await res.json();
+
+      // 3. Add agent response
+      setChatMessages(prev => [...prev, { role: 'agent', text: data.message }]);
+
+      // 4. Run actions
+      if (data.actions && data.actions.length > 0) {
+        beginBatch();
+        data.actions.forEach((action: any) => applyAction(action));
+        endBatch();
       }
+    } catch (err) {
+      console.error(err);
+      setChatMessages(prev => [...prev, { role: 'agent', text: "ERROR: System offline. Please try again later." }]);
+    } finally {
+      setIsAgentThinking(false);
     }
   };
 
@@ -489,7 +758,8 @@ export default function RepoSortingPage({
     | { type: "collapse"; id: string }
     | { type: "rename"; id: string; value: string }
     | { type: "describe"; id: string; value: string }
-    | { type: "remove"; id: string };
+    | { type: "remove"; id: string }
+    | { type: "refactor"; nodeIds: string[]; prompt: string };
 
   const applyAction = (action: AgentAction) => {
     switch (action.type) {
@@ -526,17 +796,28 @@ export default function RepoSortingPage({
         setNodeMeta((prev) =>
           prev[action.id]
             ? {
-                ...prev,
-                [action.id]: {
-                  ...prev[action.id],
-                  description: action.value,
-                },
-              }
+              ...prev,
+              [action.id]: {
+                ...prev[action.id],
+                description: action.value,
+              },
+            }
             : prev
         );
         break;
       case "remove":
         removeNode(action.id);
+        break;
+      case "refactor":
+        handleFixRisk({
+          id: `ai-refactor-${Date.now()}`,
+          title: "AI Suggested Refactor",
+          description: action.prompt || "Refactoring codebase...",
+          severity: "MEDIUM",
+          type: "REFACTOR",
+          nodeIds: action.nodeIds || [],
+          ruleId: "ai-agent-refactor"
+        });
         break;
       default:
         break;
@@ -571,62 +852,188 @@ export default function RepoSortingPage({
 
   const hasGraphData = nodes.length > 0;
 
-  const statuses=[
-    "1",
-    "2",
-    "3", //change it later to the needed words for laoding 
-    "4",
-    "5",
-  ];
-  const [statusIndex, setStatusIndex] = useState(0);
-  useEffect(()=>{
-    const id=setInterval(()=>{
-      setStatusIndex((i)=>(i+1)%statuses.length); //this interval needed to be rmoved when connecting backend
-    },1600);
-    return ()=>clearInterval(id);
-  },[]);
-
   return (
     <main className="min-h-screen bg-[#B3BAC9]">
-      <Navbar/>
-      <div className="relative w-full h-[calc(100vh-96px)] overflow-hidden">
-        {!hasGraphData&&(<div className="absolute inset-0" style={{backgroundImage:"radial-gradient(#6B84C6 1px, transparent 1px)",backgroundSize:"24px 24px",}}/>)}
-        {hasGraphData&&(<div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-[85%] h-[85%] bg-[#E6E6E6] rounded-3xl shadow-[0px_8px_40px_rgba(0,0,0,0.25)] relative overflow-hidden">
-              <ReactFlow
-                nodes={nodes}
-                edges={edges}
-                fitView
-                onNodeClick={(_, node) => {
-                  const id = node.id;
-                  setSelectedNodeId(id);
+      <Navbar showGetStarted={false} />
 
-                  if (SUBGRAPHS[id]) {
-                    expanded[id] ? collapseSubgraph(id) : expandSubgraph(id);
-                    toggleExpand(id);
-                  }
-                }}
+      {/* Brutalist Analysis Trigger Popup */}
+      {!isAnalyzing && !hasScanned && nodes.length === 0 && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/20 backdrop-blur-sm pointer-events-none p-6">
+          <div className="pointer-events-auto animate-in fade-in zoom-in-95 duration-500 max-w-md w-full">
+            <div className="relative transform -rotate-1">
+              {/* Hard Shadow Background Layer */}
+              <div className="absolute inset-0 bg-black rounded-3xl translate-x-3 translate-y-3" />
+
+              <div className="relative bg-[#E6E6E6] border-4 border-black p-10 rounded-3xl flex flex-col items-center gap-10 text-center">
+                <div className="w-24 h-24 bg-white border-4 border-black rounded-2xl flex items-center justify-center shadow-[6px_6px_0px_rgba(0,0,0,1)] -rotate-3">
+                  <span className="text-5xl">✨</span>
+                </div>
+
+                <div className="space-y-4">
+                  <h2 className="text-5xl font-black text-black font-epilogue tracking-tighter uppercase leading-tight">
+                    AI AGENT <br /> READY
+                  </h2>
+                  <p className="text-black font-itim text-xl leading-relaxed">
+                    Map dependencies and surface mission-critical risks in seconds.
+                  </p>
+                </div>
+
+                <button
+                  onClick={handleAnalyzeFn}
+                  className="w-full bg-red-500 text-white font-bold text-2xl py-6 rounded-2xl border-4 border-black shadow-[8px_8px_0px_rgba(0,0,0,1)] hover:translate-x-1 hover:translate-y-1 hover:shadow-[4px_4px_0px_rgba(0,0,0,1)] transition-all duration-200 uppercase font-pixelify tracking-wider"
+                >
+                  Start Scan
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <RiskPanel
+        risks={risks}
+        onFix={handleFixRisk}
+        onHoverRisk={(ids) => setHighlightedRiskNodes(ids)}
+      />
+
+      <div className="relative w-full h-[calc(100vh-80px)] overflow-hidden bg-[#F8F9FB]">
+        {/* Subtle grid pattern */}
+        <div className="absolute inset-0" style={{
+          backgroundImage: "radial-gradient(#E2E8F0 1.5px, transparent 1.5px)",
+          backgroundSize: "32px 32px"
+        }} />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="w-[94%] h-[92%] bg-white border-4 border-black shadow-[12px_12px_0px_rgba(0,0,0,1)] relative overflow-hidden transition-all duration-500">
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              nodeTypes={nodeTypes}
+              fitView
+              onNodeClick={(_, node) => {
+                const id = node.id;
+                setSelectedNodeId(id);
+
+                if (SUBGRAPHS[id]) {
+                  expanded[id] ? collapseSubgraph(id) : expandSubgraph(id);
+                  toggleExpand(id);
+                }
+              }}
+              defaultEdgeOptions={{
+                style: { stroke: '#000', strokeWidth: 3 },
+                type: 'smoothstep',
+              }}
+            >
+              <Background
+                color="#000"
+                gap={40}
+                size={2}
+                variant={'lines' as any}
+                style={{ opacity: 0.15 }}
+              />
+              <Controls className="bg-white border-2 border-black shadow-[4px_4px_0px_rgba(0,0,0,1)] rounded-none" />
+            </ReactFlow>
+          </div>
+        </div>
+        {/* Brutalist Loading Overlay */}
+        {isAnalyzing && (
+          <div className="absolute inset-0 z-40 bg-[#B3BAC9]/90 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in duration-500">
+
+            <div className="max-w-md w-full px-6">
+              <div className="relative">
+                {/* Shadow */}
+                <div className="absolute inset-0 bg-black rounded-3xl translate-x-2 translate-y-2" />
+
+                <div className="relative bg-white border-4 border-black p-12 rounded-3xl flex flex-col items-center gap-10">
+                  {/* Industrial Spinner */}
+                  <div className="relative">
+                    <div className="w-24 h-24 rounded-full border-8 border-black/10" />
+                    <div className="absolute inset-0 w-24 h-24 rounded-full border-8 border-t-red-500 animate-spin" />
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <span className="text-2xl font-black text-black font-epilogue italic">
+                        {analysisStep === "INGESTING" ? "01" : analysisStep === "BUILDING" ? "02" : "03"}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="text-center space-y-3">
+                    <h3 className="text-4xl font-black text-black font-epilogue tracking-tighter uppercase italic">
+                      {analysisStep === "INGESTING" ? "INGESTING" :
+                        analysisStep === "BUILDING" ? "BUILDING" : "ANALYZING"}
+                    </h3>
+                    <p className="text-black font-pixelify text-sm tracking-widest uppercase bg-red-500 text-white px-3 py-1 rounded-lg border-2 border-black inline-block">
+                      {analysisStep === "INGESTING" ? "Source Mapping" :
+                        analysisStep === "BUILDING" ? "Graph Construction" :
+                          "Risk Detection"}
+                    </p>
+                  </div>
+
+                  {/* Industrial Progress Indicator */}
+                  <div className="w-full flex items-center justify-between gap-2 px-4">
+                    {[1, 2, 3].map((step) => {
+                      const steps = ["INGESTING", "BUILDING", "ANALYZING"];
+                      const isActive = analysisStep === steps[step - 1];
+                      const idx = steps.indexOf(analysisStep);
+                      const isDone = idx > step - 1;
+
+                      return (
+                        <React.Fragment key={step}>
+                          <div className="flex flex-col items-center gap-2">
+                            <div className={`w-6 h-6 rounded-md border-2 border-black flex items-center justify-center text-[10px] font-black transition-all duration-300 ${isActive ? "bg-red-500 text-white shadow-[4px_4px_0px_rgba(0,0,0,1)] -translate-x-0.5 -translate-y-0.5" : isDone ? "bg-black text-white" : "bg-white text-black"}`}>
+                              {isDone ? "✓" : step}
+                            </div>
+                          </div>
+                          {step < 3 && <div className={`flex-1 h-1 border border-black/10 rounded-full ${isDone ? "bg-black" : "bg-neutral-200"}`} />}
+                        </React.Fragment>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-12">
+              <span className="font-pixelify text-black animate-pulse uppercase tracking-[0.2em]">Executing Agent Pipeline...</span>
+            </div>
+          </div>
+        )}
+        {showChat && (
+          <div className="absolute bottom-20 left-6 w-[450px] h-[600px] bg-[#0B0A0C] border-4 border-black shadow-[10px_10px_0px_rgba(239,68,68,1)] flex flex-col z-50 rounded-none overflow-hidden">
+            <div className="flex items-center justify-between p-5 bg-[#0B0A0C] border-b-4 border-black text-white text-xs font-black font-pixelify uppercase tracking-widest">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 bg-red-500 rounded-full animate-ping" />
+                <span>TERMINAL://AI_AGENT_STDOUT</span>
+              </div>
+              <button
+                onClick={() => setShowChat(false)}
+                className="w-8 h-8 flex items-center justify-center hover:bg-red-500 hover:text-white transition-all font-black text-lg border-2 border-white/20"
               >
-                <Background gap={24} />
-                <Controls />
-              </ReactFlow>
+                ✕
+              </button>
             </div>
-          </div>)}
-        {/*so here the node backend goes marking for easy implementaion */}
-        {!hasGraphData && (<div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
-            <div className="animate-spin w-6 h-6 border-2 border-black/30 border-t-black rounded-full" />
-            <p className="text-black/60 font-itim text-lg">
-              {statuses[statusIndex]}
-            </p>
-          </div>)}
-        {showChat && (<div className="absolute bottom-20 left-6 w-[420px] h-[560px] bg-[#5E6B91] rounded-2xl shadow-lg p-5 flex flex-col">
-            <div className="flex items-center justify-between mb-3 text-white text-sm">
-              <span>Agent</span>
-              <button onClick={() => setShowChat(false)}>✕</button>
+            <div className="flex-1 p-6 space-y-4 text-sm text-green-400 overflow-y-auto font-mono bg-[#0B0A0C]">
+              <div className="text-white/20 mb-6 font-pixelify uppercase text-[10px]">SYSTEM INITIALIZED (v4.2.1)</div>
+              {chatMessages.map((m, i) => (
+                <div key={i} className={`flex flex-col ${m.role === 'agent' ? 'items-start' : 'items-end'}`}>
+                  <div className={`p-4 rounded-none border-2 ${m.role === 'agent' ? 'border-green-500/30 bg-green-500/5' : 'border-red-500/30 bg-red-500/5'} max-w-[90%]`}>
+                    <div className="flex items-center gap-2 mb-2 opacity-50 text-[10px] uppercase font-pixelify tracking-tighter">
+                      <span>{m.role === 'agent' ? '>> ADVISOR' : '>> OPERATOR'}</span>
+                    </div>
+                    <p className="leading-relaxed whitespace-pre-wrap">{m.text}</p>
+                  </div>
+                </div>
+              ))}
+              {isAgentThinking && (
+                <div className="flex flex-col items-start animate-pulse">
+                  <div className="p-4 rounded-none border-2 border-white/10 bg-white/5">
+                    <p className="leading-relaxed font-pixelify tracking-[0.2em]">CALCULATING...</p>
+                  </div>
+                </div>
+              )}
             </div>
-            <div className="flex-1 space-y-3 text-base text-white overflow-hidden"></div>
             <form
-              className="mt-3"
+              className="p-5 bg-[#0B0A0C] border-t-4 border-black"
               onSubmit={(e) => {
                 e.preventDefault();
                 if (!chatInput.trim()) return;
@@ -634,68 +1041,47 @@ export default function RepoSortingPage({
                 setChatInput("");
               }}
             >
-              <input
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask RepoSort"
-                className="w-full bg-[#8E9AD0] rounded-lg px-3 py-2 text-base text-white placeholder-white/70 outline-none"
-              />
+              <div className="relative">
+                <input
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="EXECUTE CMD..."
+                  className="w-full bg-black border-2 border-green-500/30 rounded-none px-4 py-3 text-sm text-green-400 placeholder-green-900/50 outline-none focus:border-green-500 transition-all font-mono"
+                />
+              </div>
             </form>
-          </div>)}
-        {!showChat && (<button className="absolute bottom-10 left-10 w-14 h-14 bg-white rounded-full flex items-center justify-center shadow text-xl" onClick={() => setShowChat(true)} aria-label="Open chat">✦</button>)}
-
-        {selectedNodeId && nodeMeta[selectedNodeId] && (
-          <div className="absolute top-24 right-6 w-[320px] bg-white rounded-xl shadow-xl p-4 space-y-3">
-            <div className="text-sm font-semibold text-gray-700">
-              Node Inspector
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs text-gray-500">Label</label>
-              <input
-                value={nodeMeta[selectedNodeId].label}
-                onChange={(e) =>
-                  setNodeMeta((prev) => ({
-                    ...prev,
-                    [selectedNodeId]: {
-                      ...prev[selectedNodeId],
-                      label: e.target.value,
-                    },
-                  }))
-                }
-                onBlur={() => pushHistory()}
-                className="w-full border rounded px-2 py-1 text-sm"
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs text-gray-500">Description</label>
-              <textarea
-                value={nodeMeta[selectedNodeId].description}
-                onChange={(e) =>
-                  setNodeMeta((prev) => ({
-                    ...prev,
-                    [selectedNodeId]: {
-                      ...prev[selectedNodeId],
-                      description: e.target.value,
-                    },
-                  }))
-                }
-                onBlur={() => pushHistory()}
-                rows={3}
-                className="w-full border rounded px-2 py-1 text-sm resize-none"
-              />
-            </div>
-
-            <button
-              onClick={() => setSelectedNodeId(null)}
-              className="text-xs text-gray-500 hover:text-black"
-            >
-              Close
-            </button>
           </div>
         )}
+        {!showChat && (<button className="absolute bottom-10 left-10 w-14 h-14 bg-white rounded-full flex items-center justify-center shadow text-xl z-20" onClick={() => setShowChat(true)} aria-label="Open chat">✦</button>)}
+
+        {selectedNodeId && nodeMeta[selectedNodeId] && (
+          <NodeInspector
+            nodeId={selectedNodeId}
+            nodeData={nodeMeta[selectedNodeId]}
+            onClose={() => setSelectedNodeId(null)}
+            onUpdate={(id, updates) => {
+              setNodeMeta((prev) => ({
+                ...prev,
+                [id]: { ...prev[id], ...updates },
+              }));
+            }}
+            onFix={(id) => {
+              const node = nodes.find(n => n.id === id);
+              if (node) {
+                handleFixRisk({
+                  id: `manual-${id}`,
+                  title: `Manual Refactor: ${node.data.label}`,
+                  description: nodeMeta[id]?.description || "Requested manual refactor via inspector.",
+                  severity: "MEDIUM",
+                  type: "REFACTOR",
+                  nodeIds: [id],
+                  ruleId: "manual-refactor"
+                });
+              }
+            }}
+          />
+        )}
       </div>
-    </main>
+    </main >
   );
 }

@@ -26,7 +26,7 @@ export class AnalyzeRepoWorker implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly gemini: GeminiService,
     private readonly geminiRunner: GeminiRunnerService,
-  ) {}
+  ) { }
 
   async onModuleInit() {
     this.worker = new Worker(
@@ -184,7 +184,19 @@ export class AnalyzeRepoWorker implements OnModuleInit, OnModuleDestroy {
     const largeFiles: Array<{ rel: string; size: number }> = [];
     const walk = (dir: string) => {
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (e.name === '.git' || e.name === 'node_modules') continue;
+        if (
+          e.name === '.git' ||
+          e.name === 'node_modules' ||
+          e.name === 'dist' ||
+          e.name === 'build' ||
+          e.name === '.next' ||
+          e.name === '.venv' ||
+          e.name === 'target' ||
+          e.name === 'vendor' ||
+          e.name === 'out' ||
+          e.name === '__pycache__'
+        )
+          continue;
         const full = path.join(dir, e.name);
         if (e.isDirectory()) walk(full);
         if (e.isFile()) {
@@ -236,7 +248,7 @@ export class AnalyzeRepoWorker implements OnModuleInit, OnModuleDestroy {
             meta: { match: m[0].slice(0, 80) },
           });
         }
-      } catch {}
+      } catch { }
     }
 
     return risksToCreate;

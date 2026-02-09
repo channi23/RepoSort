@@ -6,81 +6,290 @@ datasource db {
   provider = "postgresql"
 }
 
-/**
- * =========================
- * Core Project Models
- * =========================
- */
-
 model Project {
-  id        String   @id @default(uuid())
-  name      String?
-  repoUrl   String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  repoSnapshots  RepoSnapshot[]
-  graphSnapshots GraphSnapshot[]
-  risks          Risk[]
-  plans Plan[]
-  runs Run[]
-  verifications VerificationReport[]
-  diffReports DiffReport[]
-  NodeAction     NodeAction[]
+  id             String               @id @default(uuid())
+  name           String?
+  repoUrl        String
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
   approvals      ApprovalRequest[]
   auditLogs      AuditLog[]
+  diffReports    DiffReport[]
+  graphSnapshots GraphSnapshot[]
+  NodeAction     NodeAction[]
+  plans          Plan[]
+  repoSnapshots  RepoSnapshot[]
+  risks          Risk[]
+  runs           Run[]
   stepExecutions StepExecution[]
+  verifications  VerificationReport[]
 }
 
 model RepoSnapshot {
-  id              String   @id @default(uuid())
+  id              String          @id @default(uuid())
   projectId       String
-  createdAt       DateTime @default(now())
+  createdAt       DateTime        @default(now())
   sandboxRepoPath String
   branch          String?
   commitSha       String?
-  isMonorepo      Boolean  @default(false)
+  isMonorepo      Boolean         @default(false)
   packageManager  String?
   runtime         String?
   testFramework   String?
   fileTreeJson    Json?
   configJson      Json?
-
-  project        Project         @relation(fields: [projectId], references: [id])
-  graphSnapshots GraphSnapshot[]
-  runs Run[]
+  graphSnapshots  GraphSnapshot[]
+  project         Project         @relation(fields: [projectId], references: [id])
+  runs            Run[]
 }
-
-/**
- * =========================
- * Graph Models
- * =========================
- */
 
 model GraphSnapshot {
-  id             String   @id @default(uuid())
+  id             String               @id @default(uuid())
   projectId      String
   repoSnapshotId String
-  createdAt      DateTime @default(now())
-
-  nodeCount Int @default(0)
-  edgeCount Int @default(0)
-
-  project      Project      @relation(fields: [projectId], references: [id])
-  repoSnapshot RepoSnapshot @relation(fields: [repoSnapshotId], references: [id])
-
-  nodes Node[]
-  edges Edge[]
-  risks Risk[]
-  plans Plan[]
-  verifications   VerificationReport[]
+  createdAt      DateTime             @default(now())
+  nodeCount      Int                  @default(0)
+  edgeCount      Int                  @default(0)
+  edges          Edge[]
+  project        Project              @relation(fields: [projectId], references: [id])
+  repoSnapshot   RepoSnapshot         @relation(fields: [repoSnapshotId], references: [id])
+  nodes          Node[]
+  plans          Plan[]
+  risks          Risk[]
+  verifications  VerificationReport[]
 }
 
-/**
- * =========================
- * Graph Primitives
- * =========================
- */
+model Node {
+  id              String        @id @default(uuid())
+  graphSnapshotId String
+  type            NodeType
+  label           String
+  path            String?
+  meta            Json?
+  graphSnapshot   GraphSnapshot @relation(fields: [graphSnapshotId], references: [id])
+  risks           RiskOnNode[]
+
+  @@index([graphSnapshotId])
+}
+
+model Edge {
+  id              String        @id @default(uuid())
+  graphSnapshotId String
+  type            EdgeType
+  fromNodeId      String
+  toNodeId        String
+  meta            Json?
+  graphSnapshot   GraphSnapshot @relation(fields: [graphSnapshotId], references: [id])
+
+  @@index([graphSnapshotId])
+}
+
+model Risk {
+  id              String        @id @default(uuid())
+  projectId       String
+  graphSnapshotId String
+  type            RiskType
+  severity        RiskSeverity
+  title           String
+  description     String
+  ruleId          String?
+  meta            Json?
+  createdAt       DateTime      @default(now())
+  graphSnapshot   GraphSnapshot @relation(fields: [graphSnapshotId], references: [id])
+  project         Project       @relation(fields: [projectId], references: [id])
+  nodes           RiskOnNode[]
+}
+
+model RiskOnNode {
+  riskId String
+  nodeId String
+  node   Node   @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  risk   Risk   @relation(fields: [riskId], references: [id], onDelete: Cascade)
+
+  @@id([riskId, nodeId])
+  @@index([nodeId])
+}
+
+model Plan {
+  id              String        @id @default(uuid())
+  projectId       String
+  graphSnapshotId String
+  prompt          String
+  selectedNodeIds Json
+  status          PlanStatus    @default(DRAFT)
+  createdAt       DateTime      @default(now())
+  graphSnapshot   GraphSnapshot @relation(fields: [graphSnapshotId], references: [id])
+  project         Project       @relation(fields: [projectId], references: [id])
+  steps           PlanStep[]
+  runs            Run[]
+
+  @@index([projectId, createdAt])
+  @@index([graphSnapshotId])
+}
+
+model PlanStep {
+  id            String       @id @default(uuid())
+  planId        String
+  order         Int
+  type          PlanStepType
+  title         String
+  rationale     String?
+  targetNodeIds Json
+  meta          Json?
+  plan          Plan         @relation(fields: [planId], references: [id])
+
+  @@index([planId, order])
+}
+
+model Run {
+  id              String              @id @default(uuid())
+  projectId       String
+  repoSnapshotId  String
+  planId          String
+  status          RunStatus           @default(QUEUED)
+  createdAt       DateTime            @default(now())
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  sandboxRepoPath String?
+  installOk       Boolean?
+  buildOk         Boolean?
+  testOk          Boolean?
+  installStdout   String?
+  installStderr   String?
+  buildStdout     String?
+  buildStderr     String?
+  testStdout      String?
+  testStderr      String?
+  diffReport      DiffReport?
+  patch           Patch?
+  plan            Plan                @relation(fields: [planId], references: [id])
+  project         Project             @relation(fields: [projectId], references: [id])
+  repoSnapshot    RepoSnapshot        @relation(fields: [repoSnapshotId], references: [id])
+  verification    VerificationReport?
+
+  @@index([projectId, createdAt])
+  @@index([repoSnapshotId])
+  @@index([planId])
+}
+
+model Patch {
+  id        String   @id @default(uuid())
+  runId     String   @unique
+  path      String
+  createdAt DateTime @default(now())
+  run       Run      @relation(fields: [runId], references: [id])
+}
+
+model VerificationReport {
+  id                String        @id @default(uuid())
+  runId             String        @unique
+  projectId         String
+  createdAt         DateTime      @default(now())
+  graphSnapshotId   String
+  confidence        Float
+  residualRiskCount Int
+  reportPath        String
+  graphSnapshot     GraphSnapshot @relation(fields: [graphSnapshotId], references: [id])
+  project           Project       @relation(fields: [projectId], references: [id])
+  run               Run           @relation(fields: [runId], references: [id])
+
+  @@index([projectId, createdAt])
+}
+
+model DiffReport {
+  id                    String   @id @default(uuid())
+  runId                 String   @unique
+  projectId             String
+  beforeGraphSnapshotId String
+  afterGraphSnapshotId  String
+  createdAt             DateTime @default(now())
+  nodesAddedCount       Int      @default(0)
+  nodesRemovedCount     Int      @default(0)
+  edgesAddedCount       Int      @default(0)
+  edgesRemovedCount     Int      @default(0)
+  beforeRiskCount       Int      @default(0)
+  afterRiskCount        Int      @default(0)
+  riskDelta             Int      @default(0)
+  reportPath            String
+  project               Project  @relation(fields: [projectId], references: [id])
+  run                   Run      @relation(fields: [runId], references: [id])
+}
+
+model NodeAction {
+  id              String            @id @default(uuid())
+  type            NodeActionType
+  status          NodeActionStatus  @default(QUEUED)
+  projectId       String
+  graphSnapshotId String
+  repoSnapshotId  String
+  planId          String?
+  runId           String?
+  prompt          String
+  selectedNodeIds Json
+  error           String?
+  traceId         String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  approvals       ApprovalRequest[]
+  project         Project           @relation(fields: [projectId], references: [id])
+}
+
+model ApprovalRequest {
+  id            String         @id @default(uuid())
+  projectId     String
+  nodeActionId  String?
+  planId        String?
+  runId         String?
+  status        ApprovalStatus @default(PENDING)
+  createdAt     DateTime       @default(now())
+  decidedAt     DateTime?
+  decidedByRole String?
+  reasons       Json
+  nodeAction    NodeAction?    @relation(fields: [nodeActionId], references: [id])
+  project       Project        @relation(fields: [projectId], references: [id])
+
+  @@index([projectId, status, createdAt])
+  @@index([nodeActionId])
+  @@index([planId])
+  @@index([runId])
+}
+
+model AuditLog {
+  id         String         @id @default(uuid())
+  projectId  String
+  traceId    String?
+  actorRole  String
+  action     String
+  entityType String
+  entityId   String
+  decision   PolicyDecision
+  meta       Json?
+  createdAt  DateTime       @default(now())
+  project    Project        @relation(fields: [projectId], references: [id])
+
+  @@index([projectId, createdAt])
+  @@index([entityType, entityId])
+}
+
+model StepExecution {
+  id           String          @id @default(uuid())
+  projectId    String
+  runId        String?
+  nodeActionId String?
+  stepName     StepName
+  source       ExecutionSource
+  model        String?
+  latencyMs    Int
+  success      Boolean
+  error        String?
+  createdAt    DateTime        @default(now())
+  project      Project         @relation(fields: [projectId], references: [id])
+
+  @@index([projectId, createdAt])
+  @@index([runId, createdAt])
+  @@index([nodeActionId, createdAt])
+  @@index([stepName, createdAt])
+}
 
 enum NodeType {
   PROJECT
@@ -100,33 +309,6 @@ enum EdgeType {
   CALLS
 }
 
-model Node {
-  id              String   @id @default(uuid())
-  graphSnapshotId String
-  type            NodeType
-  label           String
-  path            String?
-  meta            Json?
-
-  graphSnapshot GraphSnapshot @relation(fields: [graphSnapshotId], references: [id])
-  risks         RiskOnNode[]
-
-  @@index([graphSnapshotId])
-}
-
-model Edge {
-  id              String   @id @default(uuid())
-  graphSnapshotId String
-  type            EdgeType
-  fromNodeId      String
-  toNodeId        String
-  meta            Json?
-
-  graphSnapshot GraphSnapshot @relation(fields: [graphSnapshotId], references: [id])
-
-  @@index([graphSnapshotId])
-}
-
 enum RiskType {
   STRUCTURAL
   SECURITY
@@ -139,34 +321,6 @@ enum RiskSeverity {
   CRITICAL
 }
 
-model Risk {
-  id              String       @id @default(uuid())
-  projectId       String
-  graphSnapshotId String
-  type            RiskType
-  severity        RiskSeverity
-  title           String
-  description     String
-  ruleId          String?
-  meta            Json?
-  createdAt       DateTime     @default(now())
-
-  project       Project       @relation(fields: [projectId], references: [id])
-  graphSnapshot GraphSnapshot @relation(fields: [graphSnapshotId], references: [id])
-
-  nodes RiskOnNode[]
-}
-
-model RiskOnNode {
-  riskId String
-  nodeId String
-
-  risk Risk @relation(fields: [riskId], references: [id], onDelete: Cascade)
-  node Node @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-
-  @@id([riskId, nodeId])
-  @@index([nodeId])
-}
 enum PlanStatus {
   DRAFT
   APPROVED
@@ -180,41 +334,6 @@ enum PlanStepType {
   DOCS
 }
 
-model Plan {
-  id              String      @id @default(uuid())
-  projectId       String
-  graphSnapshotId String
-
-  prompt          String
-  selectedNodeIds Json
-  status          PlanStatus  @default(DRAFT)
-
-  createdAt       DateTime    @default(now())
-
-  steps           PlanStep[]
-
-  project         Project       @relation(fields: [projectId], references: [id])
-  graphSnapshot   GraphSnapshot  @relation(fields: [graphSnapshotId], references: [id])
-
-  @@index([projectId, createdAt])
-  @@index([graphSnapshotId])
-  runs Run[]
-}
-
-model PlanStep {
-  id            String       @id @default(uuid())
-  planId        String
-  order         Int
-  type          PlanStepType
-  title         String
-  rationale     String?
-  targetNodeIds Json
-  meta          Json?
-
-  plan          Plan @relation(fields: [planId], references: [id])
-
-  @@index([planId, order])
-}
 enum RunStatus {
   QUEUED
   RUNNING
@@ -222,92 +341,6 @@ enum RunStatus {
   FAILED
 }
 
-model Run {
-  id            String    @id @default(uuid())
-  projectId     String
-  repoSnapshotId String
-  planId        String
-
-  status        RunStatus @default(QUEUED)
-  createdAt     DateTime  @default(now())
-  startedAt     DateTime?
-  finishedAt    DateTime?
-
-  sandboxRepoPath String?  // run repo path
-  installOk     Boolean?
-  buildOk       Boolean?
-  testOk        Boolean?
-  installStdout String?
-  installStderr String?
-  buildStdout   String?
-  buildStderr   String?
-  testStdout    String?
-  testStderr    String?
-
-  patch         Patch?
-
-  project       Project     @relation(fields: [projectId], references: [id])
-  repoSnapshot  RepoSnapshot @relation(fields: [repoSnapshotId], references: [id])
-  plan          Plan        @relation(fields: [planId], references: [id])
-
-  @@index([projectId, createdAt])
-  @@index([repoSnapshotId])
-  @@index([planId])
-  verification VerificationReport?
-  diffReport DiffReport?
-
-}
-
-model Patch {
-  id        String   @id @default(uuid())
-  runId     String   @unique
-  path      String
-  createdAt DateTime @default(now())
-
-  run       Run      @relation(fields: [runId], references: [id])
-}
-
-model VerificationReport {
-  id             String   @id @default(uuid())
-  runId          String   @unique
-  projectId      String
-  createdAt      DateTime @default(now())
-
-  graphSnapshotId String
-  confidence     Float
-  residualRiskCount Int
-
-  reportPath     String   // artifacts/.../verification/report.json
-
-  run            Run      @relation(fields: [runId], references: [id])
-  project        Project  @relation(fields: [projectId], references: [id])
-  graphSnapshot  GraphSnapshot @relation(fields: [graphSnapshotId], references: [id])
-
-  @@index([projectId, createdAt])
-}
-model DiffReport {
-  id                   String   @id @default(uuid())
-  runId                String   @unique
-  projectId            String
-  beforeGraphSnapshotId String
-  afterGraphSnapshotId  String
-
-  createdAt            DateTime @default(now())
-
-  nodesAddedCount      Int      @default(0)
-  nodesRemovedCount    Int      @default(0)
-  edgesAddedCount      Int      @default(0)
-  edgesRemovedCount    Int      @default(0)
-
-  beforeRiskCount      Int      @default(0)
-  afterRiskCount       Int      @default(0)
-  riskDelta            Int      @default(0)
-
-  reportPath           String
-
-  run                  Run      @relation(fields: [runId], references: [id])
-  project              Project  @relation(fields: [projectId], references: [id])
-}
 enum NodeActionType {
   REFACTOR
   HARDEN
@@ -348,89 +381,4 @@ enum StepName {
   VERIFY
   DIFF
   EXPORT
-}
-
-model NodeAction {
-  id             String           @id @default(uuid())
-  type           NodeActionType
-  status         NodeActionStatus @default(QUEUED)
-
-  projectId      String
-  graphSnapshotId String
-  repoSnapshotId  String
-
-  planId         String?
-  runId          String?
-
-  prompt         String
-  selectedNodeIds Json
-
-  error          String?
-  traceId        String?
-
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  project       Project @relation(fields: [projectId], references: [id])
-  approvals     ApprovalRequest[]
-}
-
-model ApprovalRequest {
-  id            String         @id @default(uuid())
-  projectId     String
-  nodeActionId  String?
-  planId        String?
-  runId         String?
-  status        ApprovalStatus @default(PENDING)
-  createdAt     DateTime       @default(now())
-  decidedAt     DateTime?
-  decidedByRole String?
-  reasons       Json
-
-  project       Project        @relation(fields: [projectId], references: [id])
-  nodeAction    NodeAction?    @relation(fields: [nodeActionId], references: [id])
-
-  @@index([projectId, status, createdAt])
-  @@index([nodeActionId])
-  @@index([planId])
-  @@index([runId])
-}
-
-model AuditLog {
-  id         String         @id @default(uuid())
-  projectId  String
-  traceId    String?
-  actorRole  String
-  action     String
-  entityType String
-  entityId   String
-  decision   PolicyDecision
-  meta       Json?
-  createdAt  DateTime       @default(now())
-
-  project    Project        @relation(fields: [projectId], references: [id])
-
-  @@index([projectId, createdAt])
-  @@index([entityType, entityId])
-}
-
-model StepExecution {
-  id           String          @id @default(uuid())
-  projectId    String
-  runId        String?
-  nodeActionId String?
-  stepName     StepName
-  source       ExecutionSource
-  model        String?
-  latencyMs    Int
-  success      Boolean
-  error        String?
-  createdAt    DateTime        @default(now())
-
-  project      Project         @relation(fields: [projectId], references: [id])
-
-  @@index([projectId, createdAt])
-  @@index([runId, createdAt])
-  @@index([nodeActionId, createdAt])
-  @@index([stepName, createdAt])
 }

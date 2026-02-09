@@ -1,17 +1,17 @@
-import { Module,MiddlewareConsumer,NestModule } from '@nestjs/common';
+import { Module, MiddlewareConsumer, NestModule } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 
 import { PrismaModule } from './db/db.module';
 import { QueueModule } from './queue/queue.module';
 
-import {TraceMiddleware} from './common/middleware/trace.middleware';
+import { TraceMiddleware } from './common/middleware/trace.middleware';
 
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
-import {SandboxModule} from './sandbox/sandbox.module';
-import {StorageModule} from './storage/storage.module';
+import { SandboxModule } from './sandbox/sandbox.module';
+import { StorageModule } from './storage/storage.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { IngestionModule } from './modules/ingestion/ingestion.module';
@@ -24,13 +24,14 @@ import { NodeActionModule } from './modules/node-action/node-action.module';
 import { GovernanceModule } from './modules/governance/governance.module';
 import { ArtifactsModule } from './modules/artifacts/artifacts.module';
 import { LlmModule } from './llm/llm.module';
+import { AgentModule } from './modules/agent/agent.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
 
-    PrismaModule,   
-    QueueModule,     
+    PrismaModule,
+    QueueModule,
     SandboxModule,
     StorageModule,
     AuthModule,
@@ -45,12 +46,13 @@ import { LlmModule } from './llm/llm.module';
     GovernanceModule,
     ArtifactsModule,
     LlmModule,
+    AgentModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
 export class AppModule {
-    configure(consumer:MiddlewareConsumer){
-        consumer.apply(TraceMiddleware).forRoutes('*');
-    }
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(TraceMiddleware).forRoutes('*');
+  }
 }

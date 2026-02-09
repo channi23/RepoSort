@@ -40,7 +40,7 @@ export class GeminiService {
     return enabled;
   }
 
-  async generateText(systemPrompt: string, userPrompt: string, timeoutMs = 15_000): Promise<string | null> {
+  async generateText(systemPrompt: string, userPrompt: string, timeoutMs = 30_000): Promise<string | null> {
     const cfg = getGeminiConfig();
     if (!this.isEnabled() || !cfg.apiKey) return null;
 
@@ -90,7 +90,7 @@ export class GeminiService {
     }
   }
 
-  async generateJson<T>(systemPrompt: string, userPrompt: string, timeoutMs = 15_000): Promise<T | null> {
+  async generateJson<T>(systemPrompt: string, userPrompt: string, timeoutMs = 30_000): Promise<T | null> {
     const text = await this.generateText(systemPrompt, userPrompt, timeoutMs);
     if (!text) return null;
 
