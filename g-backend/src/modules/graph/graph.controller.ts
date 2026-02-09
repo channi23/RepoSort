@@ -8,24 +8,28 @@ import {
   NotFoundException,
   Get,
   Query,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
-import type{ Request } from 'express';
+import type { Request } from 'express';
 import { PrismaService } from '../../db/prisma.service';
 import { QUEUE_REGISTRY } from '../../queue/queue.tokens';
 import { QUEUE_NAMES } from '../../queue/queues/queue.names';
+import { BaseController } from '../../common/controllers/base.controller';
+import { SnapshotStatus } from '@prisma/client';
 
 @Controller('projects/:id/graph')
-export class GraphController {
+export class GraphController extends BaseController {
   private readonly logger = new Logger(GraphController.name);
 
   constructor(
     private readonly prisma: PrismaService,
     @Inject(QUEUE_REGISTRY) private readonly queues: any,
-  ) {}
+  ) { super(); }
 
   @Post('build')
   async buildGraph(@Param('id') projectId: string, @Req() req: Request) {
-    const traceId = (req as any).traceId;
+    const traceId = this.getTraceId(req);
 
     this.logger.log(`[traceId=${traceId}] build graph requested for project=${projectId}`);
 
@@ -36,6 +40,24 @@ export class GraphController {
 
     if (!snapshot) {
       throw new NotFoundException(`No RepoSnapshot found for project ${projectId}`);
+    }
+
+    if (snapshot.sandboxRepoPath === 'pending') {
+      return {
+        queued: false,
+        reason: 'INGESTION_IN_PROGRESS',
+        projectId,
+        repoSnapshotId: snapshot.id,
+      };
+    }
+
+    if (snapshot.sandboxRepoPath === 'failed') {
+      return {
+        queued: false,
+        reason: 'INGESTION_FAILED',
+        projectId,
+        repoSnapshotId: snapshot.id
+      }
     }
 
     const job = await this.queues.graph.add(QUEUE_NAMES.BUILD_GRAPH, {
@@ -65,7 +87,7 @@ export class GraphController {
     @Query('ref') ref: string | undefined,
     @Req() req: Request,
   ) {
-    const traceId = (req as any).traceId;
+    const traceId = this.getTraceId(req);
 
     const graphSnapshot = await this.prisma.graphSnapshot.findFirst({
       where: { projectId },
@@ -74,6 +96,20 @@ export class GraphController {
 
     if (!graphSnapshot) {
       throw new NotFoundException(`No GraphSnapshot found for project ${projectId}`);
+    }
+
+    if (graphSnapshot.status === SnapshotStatus.PROCESSING || graphSnapshot.status === SnapshotStatus.PENDING) {
+      throw new HttpException(
+        { status: 'PROCESSING', graphSnapshotId: graphSnapshot.id },
+        HttpStatus.ACCEPTED
+      );
+    }
+
+    if (graphSnapshot.status === SnapshotStatus.FAILED) {
+      throw new HttpException(
+        { status: 'FAILED', error: graphSnapshot.error, graphSnapshotId: graphSnapshot.id },
+        HttpStatus.UNPROCESSABLE_ENTITY
+      );
     }
 
     const [dbNodes, dbEdges] = await Promise.all([
@@ -105,7 +141,7 @@ export class GraphController {
   // B) GET /projects/:id/graph/snapshots
   @Get('snapshots')
   async getGraphSnapshots(@Param('id') projectId: string, @Req() req: Request) {
-    const traceId = (req as any).traceId;
+    const traceId = this.getTraceId(req);
 
     const snapshots = await this.prisma.graphSnapshot.findMany({
       where: { projectId },

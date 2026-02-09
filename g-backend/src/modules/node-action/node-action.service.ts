@@ -2,11 +2,11 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../db/prisma.service';
 import { getGeminiConfig } from '../../config/gemini.config';
 
-type ActionType = 'REFACTOR' | 'HARDEN' | 'ADD_TESTS';
+type ActionType = 'REFACTOR' | 'HARDEN' | 'ADD_TESTS' | 'OPTIMIZE' | 'RENAME';
 
 @Injectable()
 export class NodeActionService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   async createAction(params: {
     type: ActionType;
@@ -15,10 +15,10 @@ export class NodeActionService {
     selectedNodeIds: string[];
     prompt?: string;
     traceId?: string;
+    autoApply?: boolean;
   }) {
-    const { type, projectId, graphSnapshotId, selectedNodeIds, prompt, traceId } = params;
+    const { type, projectId, graphSnapshotId, selectedNodeIds, prompt, traceId, autoApply = true } = params;
 
-    // Find repoSnapshotId from graphSnapshot
     const graph = await this.prisma.graphSnapshot.findUnique({
       where: { id: graphSnapshotId },
       select: { repoSnapshotId: true, projectId: true },
@@ -28,31 +28,27 @@ export class NodeActionService {
       throw new Error(`GraphSnapshot not found for project`);
     }
 
-    if (selectedNodeIds.length > 0) {
-      const validNodeCount = await this.prisma.node.count({
-        where: { graphSnapshotId, id: { in: selectedNodeIds } },
-      });
-      if (validNodeCount !== selectedNodeIds.length) {
-        throw new Error('selectedNodeIds contain nodes outside the graph snapshot');
-      }
-    }
-
     const defaultPrompt =
       type === 'REFACTOR'
         ? 'Refactor selected code to improve structure and maintainability.'
         : type === 'HARDEN'
           ? 'Harden selected area: add validation, fix unsafe patterns, and improve security posture.'
-          : 'Add tests for the selected area and ensure coverage for the changes.';
+          : type === 'OPTIMIZE'
+            ? 'Optimize technical performance and resource usage in the selected area.'
+            : type === 'RENAME'
+              ? 'Propose better naming for the selected code units based on their implementation.'
+              : 'Add tests for the selected area and ensure coverage for the changes.';
 
     const finalPrompt = prompt?.trim() ? prompt.trim() : defaultPrompt;
 
-    // Create Plan FIRST (draft) so the pipeline has a planId
+    // Create Plan FIRST
     const plan = await this.prisma.plan.create({
       data: {
         projectId,
         graphSnapshotId,
         prompt: finalPrompt,
         selectedNodeIds,
+        autoApply,
         status: 'DRAFT',
       },
       select: { id: true },
@@ -75,6 +71,32 @@ export class NodeActionService {
     });
 
     return { nodeActionId: action.id, planId: plan.id, repoSnapshotId: action.repoSnapshotId };
+  }
+
+  async executeAction(nodeActionId: string, traceId?: string) {
+    const action = await this.prisma.nodeAction.findUnique({
+      where: { id: nodeActionId },
+      include: { plan: true },
+    });
+
+    if (!action || !action.planId) throw new Error('NodeAction or Plan not found');
+
+    // Create or find Run
+    const run = await this.prisma.run.create({
+      data: {
+        projectId: action.projectId,
+        repoSnapshotId: action.repoSnapshotId!,
+        planId: action.planId,
+        status: 'QUEUED',
+      },
+    });
+
+    await this.prisma.nodeAction.update({
+      where: { id: nodeActionId },
+      data: { runId: run.id, status: 'RUNNING' },
+    });
+
+    return { runId: run.id };
   }
 
   async getAction(id: string) {

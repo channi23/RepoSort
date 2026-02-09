@@ -1,24 +1,24 @@
 import { Module, Global } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import {BuildGraphWorker} from './processors/build-graph.worker';
+import { BuildGraphWorker } from './processors/build-graph.worker';
 import { Queue } from 'bullmq';
-import {StorageModule} from '../storage/storage.module'; 
-import {SandboxModule} from '../sandbox/sandbox.module';
+import { StorageModule } from '../storage/storage.module';
+import { SandboxModule } from '../sandbox/sandbox.module';
 import { QueueTestController } from './queue-test.controller';
 import { QUEUE_NAMES } from './queues/queue.names';
-import {IngestWorker} from './processors/ingest.worker';
-import {QUEUE_REGISTRY} from './queue.tokens';
-import {TestWorker} from './processors/test.worker';
-import {AnalyzeRepoWorker} from './processors/analyze-repo.worker';
-import {CreatePlanWorker} from './processors/create-plan.worker';
-import {ApplyPlanWorker} from './processors/apply-plan.worker';
-import {VerifyRunWorker} from './processors/verify-run.worker';
-import {DiffRunWorker} from './processors/diff-run.worker';
+import { IngestWorker } from './processors/ingest.worker';
+import { QUEUE_REGISTRY } from './queue.tokens';
+import { TestWorker } from './processors/test.worker';
+import { AnalyzeRepoWorker } from './processors/analyze-repo.worker';
+import { CreatePlanWorker } from './processors/create-plan.worker';
+import { ApplyPlanWorker } from './processors/apply-plan.worker';
+import { VerifyRunWorker } from './processors/verify-run.worker';
+import { DiffRunWorker } from './processors/diff-run.worker';
 import { ExportArtifactsWorker } from './processors/export-artifacts.worker';
 import { LlmModule } from '../llm/llm.module';
 @Global()
 @Module({
-  imports: [ConfigModule,SandboxModule,StorageModule, LlmModule],
+  imports: [ConfigModule, SandboxModule, StorageModule, LlmModule],
   controllers: [QueueTestController],
   providers: [
     TestWorker,
@@ -39,6 +39,15 @@ import { LlmModule } from '../llm/llm.module';
               host: 'localhost',
               port: 6379,
             },
+            defaultJobOptions: {
+              attempts: 3,
+              backoff: {
+                type: 'exponential',
+                delay: 1000,
+              },
+              removeOnComplete: true, // Keep Redis clean
+              removeOnFail: false,    // Keep failed for debugging
+            },
           });
 
         return {
@@ -58,4 +67,4 @@ import { LlmModule } from '../llm/llm.module';
   ],
   exports: [QUEUE_REGISTRY],
 })
-export class QueueModule {}
+export class QueueModule { }

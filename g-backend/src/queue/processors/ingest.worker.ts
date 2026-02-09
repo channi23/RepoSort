@@ -7,6 +7,10 @@ import { GeminiRunnerService } from '../../llm/gemini-runner.service';
 import { GeminiService } from '../../llm/gemini.service';
 import { SandboxService } from '../../sandbox/sandbox.service';
 import { QUEUE_NAMES } from '../queues/queue.names';
+import { QUEUE_REGISTRY } from '../queue.tokens'; // Added
+import { Queue } from 'bullmq'; // Added
+import { Inject } from '@nestjs/common'; // Added
+import { SnapshotStatus } from '@prisma/client'; // Added
 
 type IngestMetadata = {
   packageManager: string | null;
@@ -26,7 +30,8 @@ export class IngestWorker implements OnModuleInit, OnModuleDestroy {
     private readonly sandbox: SandboxService,
     private readonly gemini: GeminiService,
     private readonly geminiRunner: GeminiRunnerService,
-  ) {}
+    @Inject(QUEUE_REGISTRY) private readonly queues: any, // Added
+  ) { }
 
   async onModuleInit() {
     this.worker = new Worker(
@@ -42,81 +47,106 @@ export class IngestWorker implements OnModuleInit, OnModuleDestroy {
           data: {
             projectId,
             sandboxRepoPath: 'pending',
+            status: SnapshotStatus.PROCESSING, // Set to PROCESSING
           },
         });
 
-        const repoDir = this.sandbox.ensureRepoDir(projectId, snapshot.id);
+        try {
+          const repoDir = this.sandbox.ensureRepoDir(projectId, snapshot.id);
 
-        const cloneRes = await this.sandbox.runCommand({
-          cwd: path.dirname(repoDir),
-          cmd: 'git',
-          args: ['clone', project.repoUrl, 'repo', '--depth', '1'],
-          timeoutMs: 5 * 60_000,
-        });
+          const cloneRes = await this.sandbox.runCommand({
+            cwd: path.dirname(repoDir),
+            cmd: 'git',
+            args: ['clone', project.repoUrl, 'repo', '--depth', '1'],
+            timeoutMs: 5 * 60_000,
+          });
 
-        if (cloneRes.exitCode !== 0) {
-          this.logger.error(`[traceId=${traceId}] [step=INGEST] clone failed: ${cloneRes.stderr}`);
-          throw new Error(`git clone failed: ${cloneRes.stderr}`);
+          if (cloneRes.exitCode !== 0) {
+            this.logger.error(`[traceId=${traceId}] [step=INGEST] clone failed: ${cloneRes.stderr}`);
+            throw new Error(`git clone failed: ${cloneRes.stderr}`);
+          }
+
+          const branchRes = await this.sandbox.runCommand({
+            cwd: repoDir,
+            cmd: 'git',
+            args: ['rev-parse', '--abbrev-ref', 'HEAD'],
+            timeoutMs: 30_000,
+          });
+
+          const commitRes = await this.sandbox.runCommand({
+            cwd: repoDir,
+            cmd: 'git',
+            args: ['rev-parse', 'HEAD'],
+            timeoutMs: 30_000,
+          });
+
+          const branch = branchRes.stdout?.trim() || null;
+          const commitSha = commitRes.stdout?.trim() || null;
+
+          const fileTreeJson = this.buildFileTree(repoDir, 3);
+
+          const attribution = await this.geminiRunner.runWithGeminiFirst<IngestMetadata>({
+            stepName: 'INGEST',
+            traceId,
+            projectId,
+            geminiFn: async () => {
+              const metadata = await this.detectWithGemini(repoDir, fileTreeJson);
+              return metadata;
+            },
+            fallbackFn: async () => this.detectWithFallback(repoDir),
+          });
+
+          const configJson = {
+            hasEnvExample: fs.existsSync(path.join(repoDir, '.env.example')),
+            hasDockerfile: fs.existsSync(path.join(repoDir, 'Dockerfile')),
+            hasCompose: fs.existsSync(path.join(repoDir, 'docker-compose.yml')),
+            hasNest: fs.existsSync(path.join(repoDir, 'nest-cli.json')),
+            ingestSummary: attribution.value.summary ?? null,
+          };
+
+          await this.prisma.repoSnapshot.update({
+            where: { id: snapshot.id },
+            data: {
+              sandboxRepoPath: repoDir,
+              branch,
+              commitSha,
+              isMonorepo: attribution.value.isMonorepo,
+              packageManager: attribution.value.packageManager,
+              runtime: attribution.value.runtime,
+              testFramework: attribution.value.testFramework,
+              fileTreeJson,
+              configJson,
+              status: SnapshotStatus.COMPLETED, // Set to COMPLETED
+            },
+          });
+
+          // Trigger Next Step: Build Graph
+          const buildJob = await this.queues.graph.add(QUEUE_NAMES.BUILD_GRAPH, {
+            projectId,
+            repoSnapshotId: snapshot.id,
+            traceId,
+          });
+
+          this.logger.log(
+            `[traceId=${traceId}] [step=INGEST] done. Enqueued BUILD_GRAPH jobId=${buildJob.id}`,
+          );
+
+          return { snapshotId: snapshot.id };
+
+        } catch (error) {
+          this.logger.error(`[traceId=${traceId}] [step=INGEST] failed: ${error}`);
+          // Mark snapshot as failed so frontend stops polling
+          // Mark snapshot as failed so frontend stops polling
+          await this.prisma.repoSnapshot.update({
+            where: { id: snapshot.id },
+            data: {
+              sandboxRepoPath: 'failed',
+              status: SnapshotStatus.FAILED,
+              error: String(error).slice(0, 1000)
+            }
+          });
+          throw error;
         }
-
-        const branchRes = await this.sandbox.runCommand({
-          cwd: repoDir,
-          cmd: 'git',
-          args: ['rev-parse', '--abbrev-ref', 'HEAD'],
-          timeoutMs: 30_000,
-        });
-
-        const commitRes = await this.sandbox.runCommand({
-          cwd: repoDir,
-          cmd: 'git',
-          args: ['rev-parse', 'HEAD'],
-          timeoutMs: 30_000,
-        });
-
-        const branch = branchRes.stdout?.trim() || null;
-        const commitSha = commitRes.stdout?.trim() || null;
-
-        const fileTreeJson = this.buildFileTree(repoDir, 3);
-
-        const attribution = await this.geminiRunner.runWithGeminiFirst<IngestMetadata>({
-          stepName: 'INGEST',
-          traceId,
-          projectId,
-          geminiFn: async () => {
-            const metadata = await this.detectWithGemini(repoDir, fileTreeJson);
-            return metadata;
-          },
-          fallbackFn: async () => this.detectWithFallback(repoDir),
-        });
-
-        const configJson = {
-          hasEnvExample: fs.existsSync(path.join(repoDir, '.env.example')),
-          hasDockerfile: fs.existsSync(path.join(repoDir, 'Dockerfile')),
-          hasCompose: fs.existsSync(path.join(repoDir, 'docker-compose.yml')),
-          hasNest: fs.existsSync(path.join(repoDir, 'nest-cli.json')),
-          ingestSummary: attribution.value.summary ?? null,
-        };
-
-        await this.prisma.repoSnapshot.update({
-          where: { id: snapshot.id },
-          data: {
-            sandboxRepoPath: repoDir,
-            branch,
-            commitSha,
-            isMonorepo: attribution.value.isMonorepo,
-            packageManager: attribution.value.packageManager,
-            runtime: attribution.value.runtime,
-            testFramework: attribution.value.testFramework,
-            fileTreeJson,
-            configJson,
-          },
-        });
-
-        this.logger.log(
-          `[traceId=${traceId}] [step=INGEST] done [source=${attribution.source}] model=${attribution.model ?? 'n/a'} latencyMs=${attribution.latencyMs} snapshotId=${snapshot.id}`,
-        );
-
-        return { snapshotId: snapshot.id };
       },
       { connection: { host: 'localhost', port: 6379 } },
     );
@@ -205,7 +235,7 @@ export class IngestWorker implements OnModuleInit, OnModuleDestroy {
         else if (deps.jest) testFramework = 'jest';
         else if (deps.mocha) testFramework = 'mocha';
         else if (pkg.scripts?.test) testFramework = 'npm-script';
-      } catch {}
+      } catch { }
     }
 
     return {

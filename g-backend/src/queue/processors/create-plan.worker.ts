@@ -48,7 +48,7 @@ export class CreatePlanWorker implements OnModuleInit, OnModuleDestroy {
     private readonly geminiRunner: GeminiRunnerService,
     private readonly audit: AuditService,
     private readonly moduleRef: ModuleRef,
-  ) {}
+  ) { }
 
   async onModuleInit() {
     const queues = this.moduleRef.get<QueueRegistry>(QUEUE_REGISTRY, { strict: false });
@@ -318,6 +318,25 @@ export class CreatePlanWorker implements OnModuleInit, OnModuleDestroy {
               meta: { runId, skippedApply: true },
             });
             return { ok: true, planId, runId, skipped: true };
+          }
+
+          if (plan.autoApply === false) {
+            this.logger.log(`[traceId=${traceId}] APPLY_PLAN auto-enqueue disabled for plan=${planId}`);
+            await this.prisma.nodeAction.updateMany({
+              where: { id: nodeActionId },
+              data: { status: 'SUCCEEDED' },
+            });
+            await this.audit.log({
+              projectId,
+              traceId,
+              actorRole: 'system',
+              action: 'worker.create-plan.done',
+              entityType: 'Plan',
+              entityId: planId,
+              decision: 'ALLOW',
+              meta: { runId, proposalOnly: true },
+            });
+            return { ok: true, planId, runId, proposalOnly: true };
           }
 
           await this.prisma.nodeAction.updateMany({

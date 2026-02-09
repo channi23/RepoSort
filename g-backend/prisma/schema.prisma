@@ -38,6 +38,8 @@ model RepoSnapshot {
   testFramework   String?
   fileTreeJson    Json?
   configJson      Json?
+  status          SnapshotStatus  @default(PENDING)
+  error           String?
   graphSnapshots  GraphSnapshot[]
   project         Project         @relation(fields: [projectId], references: [id])
   runs            Run[]
@@ -50,6 +52,8 @@ model GraphSnapshot {
   createdAt      DateTime             @default(now())
   nodeCount      Int                  @default(0)
   edgeCount      Int                  @default(0)
+  status         SnapshotStatus       @default(PENDING)
+  error          String?
   edges          Edge[]
   project        Project              @relation(fields: [projectId], references: [id])
   repoSnapshot   RepoSnapshot         @relation(fields: [repoSnapshotId], references: [id])
@@ -116,12 +120,14 @@ model Plan {
   graphSnapshotId String
   prompt          String
   selectedNodeIds Json
+  autoApply       Boolean       @default(true)
   status          PlanStatus    @default(DRAFT)
   createdAt       DateTime      @default(now())
   graphSnapshot   GraphSnapshot @relation(fields: [graphSnapshotId], references: [id])
   project         Project       @relation(fields: [projectId], references: [id])
   steps           PlanStep[]
   runs            Run[]
+  nodeActions     NodeAction[]
 
   @@index([projectId, createdAt])
   @@index([graphSnapshotId])
@@ -232,6 +238,7 @@ model NodeAction {
   updatedAt       DateTime          @updatedAt
   approvals       ApprovalRequest[]
   project         Project           @relation(fields: [projectId], references: [id])
+  plan            Plan?             @relation(fields: [planId], references: [id])
 }
 
 model ApprovalRequest {
@@ -291,8 +298,18 @@ model StepExecution {
   @@index([stepName, createdAt])
 }
 
+
+enum SnapshotStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 enum NodeType {
   PROJECT
+  LAYER
+  SUBSYSTEM
   DIR
   FILE
   MODULE
@@ -300,6 +317,11 @@ enum NodeType {
   DEPENDENCY
   CONFIG
   SERVICE
+  COMPONENT
+  HOOK
+  CLASS
+  HANDLER
+  CONTEXT
 }
 
 enum EdgeType {
@@ -345,6 +367,8 @@ enum NodeActionType {
   REFACTOR
   HARDEN
   ADD_TESTS
+  OPTIMIZE
+  RENAME
 }
 
 enum NodeActionStatus {

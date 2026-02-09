@@ -2,15 +2,7 @@
 
 import { useState } from "react";
 
-export interface Risk {
-    id: string;
-    type: "STRUCTURAL" | "SECURITY" | "REFACTOR" | "UI";
-    severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-    title: string;
-    description: string;
-    ruleId: string;
-    nodeIds: string[];
-}
+import { Risk } from "@/lib/types";
 
 type RiskPanelProps = {
     risks: Risk[];

@@ -1,8 +1,11 @@
 "use client";
 import Navbar from "@/components/Navbar";
-import RiskPanel, { Risk } from "@/components/RiskPanel"; // Import RiskPanel
+import RiskPanel from "@/components/RiskPanel";
 import React, { useState, use, useEffect, useRef } from "react";
-import ReactFlow, { Background, Controls, ReactFlowProvider, applyNodeChanges, applyEdgeChanges, OnNodesChange, OnEdgesChange } from "reactflow";
+import ReactFlow, { Background, Controls, ReactFlowProvider, applyNodeChanges, applyEdgeChanges, OnNodesChange, OnEdgesChange, Node } from "reactflow";
+import { useProjectStatus } from "@/hooks/useProjectStatus";
+import { Risk, ProjectStatus } from "@/lib/types";
+import api, { nodeActions } from "@/lib/api";
 import "reactflow/dist/style.css";
 import IndustrialNode from "@/components/IndustrialNode";
 import NodeInspector from "@/components/NodeInspector";
@@ -14,6 +17,8 @@ const nodeTypes = {
   MODULE: IndustrialNode,
   SERVICE: IndustrialNode,
   CONFIG: IndustrialNode,
+  LAYER: IndustrialNode,
+  FUNCTION: IndustrialNode
 };
 
 export default function RepoSortingPage({
@@ -22,7 +27,7 @@ export default function RepoSortingPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
-  const projectId = id; // Assuming ID in URL is project ID for now
+  const projectId = id;
   const [showChat, setShowChat] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [nodes, setNodes] = useState<any[]>([]);
@@ -30,17 +35,39 @@ export default function RepoSortingPage({
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
+  // Use shared hook for status
+  const { status: projectStatus, data: statusData, error: projectError } = useProjectStatus(projectId);
+
   const [nodeMeta, setNodeMeta] = useState<
     Record<string, { label: string; description: string }>
   >({});
 
   // AI & Risk State
   const [risks, setRisks] = useState<Risk[]>([]);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisStep, setAnalysisStep] = useState<"IDLE" | "INGESTING" | "BUILDING" | "ANALYZING" | "FIXING">("IDLE");
   const [highlightedRiskNodes, setHighlightedRiskNodes] = useState<string[] | null>(null);
   const [currGraphSnapshotId, setCurrGraphSnapshotId] = useState<string | null>(null);
   const [hasScanned, setHasScanned] = useState(false);
+
+  // Sync UI state with Project Status
+  useEffect(() => {
+    if (projectStatus === ProjectStatus.INGESTING) setAnalysisStep("INGESTING");
+    else if (projectStatus === ProjectStatus.ANALYZING) setAnalysisStep("ANALYZING");
+    else if (projectStatus === ProjectStatus.READY) {
+      setAnalysisStep("IDLE");
+      setHasScanned(true);
+      if (statusData?.graphSnapshotId) {
+        setCurrGraphSnapshotId(statusData.graphSnapshotId);
+        // Trigger graph fetch if we don't have nodes yet
+        if (nodes.length === 0) fetchGraph();
+        fetchRisks();
+      }
+    }
+    else if (projectStatus === ProjectStatus.FAILED) {
+      setAnalysisStep("IDLE");
+      alert(`Project Failed: ${projectError || 'Unknown error'}`);
+    }
+  }, [projectStatus, statusData]);
 
   // Undo/Redo history state
   const [history, setHistory] = useState<any[]>([]);
@@ -50,12 +77,17 @@ export default function RepoSortingPage({
     { role: 'agent', text: 'Agent is monitoring repository structure. Ask me anything about dependencies or risks.' }
   ]);
   const [isAgentThinking, setIsAgentThinking] = useState(false);
+  const [isExplaining, setIsExplaining] = useState(false);
+  const [activeActionNodeIds, setActiveActionNodeIds] = useState<Set<string>>(new Set());
 
-  // Refs to track current state for pushHistory (avoid stale closures)
+  // Refs to track current state for pushHistory
   const nodesRef = useRef<any[]>([]);
   const edgesRef = useRef<any[]>([]);
   const expandedRef = useRef<Record<string, boolean>>({});
   const nodeMetaRef = useRef<Record<string, { label: string; description: string }>>({});
+
+  // Dynamic Subgraphs Map (Populated from API)
+  const subgraphsRef = useRef<Record<string, { id: string; label: string; type: string }[]>>({});
 
   // Helper to push snapshot to history
   const pushHistory = () => {
@@ -91,62 +123,6 @@ export default function RepoSortingPage({
     setIsBatching(false);
   };
 
-  const SUBGRAPHS: Record<
-    string,
-    { id: string; label: string }[]
-  > = {
-    frontend: [
-      { id: "pages", label: "Pages" },
-      { id: "components", label: "Components" },
-    ],
-
-    pages: [
-      { id: "home", label: "Home.tsx" },
-      { id: "dashboard", label: "Dashboard.tsx" },
-    ],
-
-    home: [
-      { id: "home_layout", label: "Layout" },
-    ],
-
-    home_layout: [
-      { id: "home_background", label: "Background" },
-      { id: "home_sections", label: "Sections" },
-    ],
-
-    components: [
-      { id: "navbar", label: "Navbar.tsx" },
-      { id: "card", label: "Card.tsx" },
-    ],
-
-    backend: [
-      { id: "controllers", label: "Controllers" },
-      { id: "services", label: "Services" },
-    ],
-
-    controllers: [
-      { id: "user_controller", label: "UserController" },
-      { id: "repo_controller", label: "RepoController" },
-    ],
-
-    database: [
-      { id: "tables", label: "Tables" },
-      { id: "indexes", label: "Indexes" },
-    ],
-
-    tables: [
-      { id: "users_table", label: "users" },
-      { id: "repos_table", label: "repositories" },
-    ],
-  };
-
-  const steps = [
-    { id: "INGESTING", label: "INGESTING" },
-    { id: "BUILDING", label: "BUILDING" },
-    { id: "ANALYZING", label: "ANALYZING" },
-    { id: "FIXING", label: "FIXING" },
-  ];
-
   // Helper: collect all descendant node ids (including root)
   const collectSubtreeIds = (rootId: string): string[] => {
     const result = new Set<string>();
@@ -156,7 +132,7 @@ export default function RepoSortingPage({
       const current = stack.pop()!;
       result.add(current);
 
-      const children = SUBGRAPHS[current];
+      const children = subgraphsRef.current[current];
       if (children) {
         children.forEach((c) => {
           if (!result.has(c.id)) stack.push(c.id);
@@ -173,7 +149,8 @@ export default function RepoSortingPage({
     parentId?: string,
     offsetX = 0,
     offsetY = 0,
-    recordHistory = true
+    recordHistory = true,
+    type = 'FILE'
   ) => {
     if (recordHistory) {
       pushHistory();
@@ -184,9 +161,9 @@ export default function RepoSortingPage({
       const parent = prev.find((n) => n.id === parentId);
       const position = parent
         ? { x: parent.position.x + offsetX, y: parent.position.y + offsetY }
-        : { x: 120 + prev.length * 180, y: 220 };
+        : { x: 120 + prev.length * 180, y: 220 }; // Default for roots
 
-      const newNodes = [...prev, { id, data: { label: label ?? id }, position }];
+      const newNodes = [...prev, { id, type, data: { label: label ?? id }, position }];
       nodesRef.current = newNodes;
       return newNodes;
     });
@@ -194,7 +171,7 @@ export default function RepoSortingPage({
     setNodeMeta((prev) => {
       const newMeta = {
         ...prev,
-        [id]: { label: label ?? id, description: "" },
+        [id]: { label: label ?? id, description: "", type },
       };
       nodeMetaRef.current = newMeta;
       return newMeta;
@@ -225,13 +202,14 @@ export default function RepoSortingPage({
         data: {
           ...n.data,
           label: nodeMeta[n.id]?.label ?? n.data.label,
+          isAiActive: activeActionNodeIds.has(n.id),
         },
         style: highlightedRiskNodes?.includes(n.id)
-          ? { border: '2px solid #ef4444', boxShadow: '0 0 10px rgba(239, 68, 68, 0.5)' }
+          ? { border: '4px solid #ef4444', boxShadow: '0 0 15px rgba(239, 68, 68, 0.6)' }
           : undefined
       }))
     );
-  }, [nodeMeta, highlightedRiskNodes]);
+  }, [nodeMeta, highlightedRiskNodes, activeActionNodeIds]);
 
   const onNodesChange: OnNodesChange = (changes) => {
     setNodes((nds) => applyNodeChanges(changes, nds));
@@ -247,17 +225,24 @@ export default function RepoSortingPage({
 
   const expandSubgraph = (parentId: string) => {
     pushHistory();
-    const children = SUBGRAPHS[parentId];
+    const children = subgraphsRef.current[parentId];
     if (!children) return;
+
+    // Centered Layout Config
+    const CHILD_WIDTH = 250;
+    const CHILD_GAP = 50;
+    const totalWidth = children.length * CHILD_WIDTH + (children.length - 1) * CHILD_GAP;
+    const startX = -(totalWidth / 2) + (CHILD_WIDTH / 2);
 
     children.forEach((child, index) => {
       addNode(
         child.id,
         child.label,
         parentId,
-        -120 + index * 200,
-        140,
-        false
+        startX + index * (CHILD_WIDTH + CHILD_GAP), // Centered horizontal spread
+        300, // Increased vertical spacing
+        false,
+        child.type
       );
       connectNodes(parentId, child.id, false);
     });
@@ -302,13 +287,16 @@ export default function RepoSortingPage({
       pushHistory();
     }
     setEdges((prev) => {
+      // Avoid duplicate edges
+      if (prev.find(e => e.source === from && e.target === to)) return prev;
+
       const newEdges = [
         ...prev,
         {
           id: `${from}-${to}-${Date.now()}`,
           source: from,
           target: to,
-          label: "CONTAINS",
+          label: "CONTAINS", // Default label for UI-created edges
           style: { stroke: '#000', strokeWidth: 3 },
           animated: false,
         },
@@ -329,7 +317,6 @@ export default function RepoSortingPage({
     });
   };
 
-  // Remove a node and its entire subtree, with history, edges, expanded, and meta cleanup.
   const removeNode = (id: string) => {
     pushHistory();
 
@@ -393,12 +380,6 @@ export default function RepoSortingPage({
       setEdges(last.edges);
       setExpanded(last.expanded);
       setNodeMeta(last.nodeMeta);
-
-      nodesRef.current = last.nodes;
-      edgesRef.current = last.edges;
-      expandedRef.current = last.expanded;
-      nodeMetaRef.current = last.nodeMeta;
-
       return prev;
     });
   };
@@ -421,11 +402,6 @@ export default function RepoSortingPage({
       setEdges(next.edges);
       setExpanded(next.expanded);
       setNodeMeta(next.nodeMeta);
-
-      nodesRef.current = next.nodes;
-      edgesRef.current = next.edges;
-      expandedRef.current = next.expanded;
-      nodeMetaRef.current = next.nodeMeta;
 
       return prev.slice(1);
     });
@@ -452,34 +428,145 @@ export default function RepoSortingPage({
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  // Initial Load: Check if project already has a graph/risks
-  useEffect(() => {
-    const initLoad = async () => {
-      try {
-        const res = await fetch(`http://localhost:3000/projects/${projectId}/graph`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.graphSnapshotId) {
-            setCurrGraphSnapshotId(data.graphSnapshotId);
-            setHasScanned(true);
+  const fetchGraph = async () => {
+    try {
+      const res = await api.get(`/projects/${projectId}/graph`);
+      const data = res.data;
 
-            if (data.nodes) {
-              const laidOutNodes = data.nodes.map((n: any, i: number) => ({
-                ...n,
-                position: (n.position?.x === 0 && n.position?.y === 0)
-                  ? { x: (i % 6) * 280, y: Math.floor(i / 6) * 220 }
-                  : n.position
-              }));
-              setNodes(laidOutNodes);
-            }
-            if (data.edges) setEdges(data.edges);
+      const apiNodes = data.nodes || [];
+      const apiEdges = data.edges || [];
 
-            // Fetch risks too
-            const risksRes = await fetch(`http://localhost:3000/projects/${projectId}/risks`);
-            if (risksRes.ok) {
-              const rData = await risksRes.json();
-              const rList = Array.isArray(rData) ? rData : (rData.risks || []);
-              setRisks(rList.map((r: any) => ({
+      // Process Edges for Containment
+      const containment: Record<string, any[]> = {};
+      const incomingContains = new Set<string>();
+
+      apiEdges.forEach((e: any) => {
+        if (e.label === 'CONTAINS') {
+          if (!containment[e.source]) containment[e.source] = [];
+          const child = apiNodes.find((n: any) => n.id === e.target);
+          if (child) {
+            containment[e.source].push(child);
+            incomingContains.add(e.target);
+          }
+        }
+      });
+
+      // Populate Subgraphs Ref
+      subgraphsRef.current = {};
+      Object.keys(containment).forEach(parentId => {
+        subgraphsRef.current[parentId] = containment[parentId].map(n => ({
+          id: n.id,
+          label: n.data?.label || n.id,
+          type: n.type
+        }));
+      });
+
+      // Hydrate meta with types from API
+      const metaInit: Record<string, any> = {};
+      apiNodes.forEach((n: any) => {
+        metaInit[n.id] = {
+          label: n.data?.label || n.id,
+          description: n.data?.description || "",
+          type: n.type
+        };
+      });
+      setNodeMeta(prev => ({ ...prev, ...metaInit }));
+
+      // Find Roots (nodes not contained by anything)
+      // If no nodes have 'CONTAINS' edges pointing to them, they are roots.
+      // If using 'PROJECT' as root, we can filter by type too.
+      let rootNodes = apiNodes.filter((n: any) => !incomingContains.has(n.id));
+
+      if (rootNodes.length === 0 && apiNodes.length > 0) {
+        // Fallback if circular or weird structure
+        rootNodes = apiNodes.filter((n: any) => n.type === 'PROJECT');
+        if (rootNodes.length === 0) rootNodes = [apiNodes[0]]; // fallback to first
+      }
+
+      // Initial Layout for Roots
+      const initialNodes = rootNodes.map((n: any, i: number) => ({
+        ...n,
+        type: n.type,
+        data: { label: n.data?.label || n.id },
+        position: (n.position?.x === 0 && n.position?.y === 0)
+          ? { x: (i % 6) * 350, y: Math.floor(i / 6) * 300 }
+          : n.position
+      }));
+
+      setNodes(initialNodes);
+
+      // Initially show no edges or only edges between roots (likely none if they are roots)
+      // Non-containment edges (calls, depends) could be shown if both nodes are visible
+      // For now, start clean.
+      setEdges([]);
+
+    } catch (e) {
+      console.error("Failed to load graph", e);
+    }
+  };
+
+  const fetchRisks = async () => {
+    try {
+      const res = await api.get(`/projects/${projectId}/risks`);
+      const rList = Array.isArray(res.data) ? res.data : (res.data.risks || []);
+      setRisks(rList.map((r: any) => ({
+        id: r.id,
+        type: r.type,
+        severity: r.severity,
+        title: r.title,
+        description: r.description,
+        ruleId: r.ruleId,
+        nodeIds: r.nodeIds || (r.nodes?.map((n: any) => n.nodeId)) || [],
+      })));
+    } catch (e) {
+      console.error("Failed to load risks", e);
+    }
+  };
+
+  // --- API Integrations ---
+
+  const handleAnalyzeFn = async () => {
+    setAnalysisStep("INGESTING");
+    try {
+      const res = await api.post(`/projects/${projectId}/analyze`);
+    } catch (err) {
+      console.error(err);
+      setAnalysisStep("IDLE");
+      alert(err instanceof Error ? err.message : "Failed to analyze repository.");
+    }
+  };
+
+  const handleFixRisk = async (risk: Risk) => {
+    if (!currGraphSnapshotId) return;
+
+    setAnalysisStep("FIXING");
+
+    try {
+      const res = await api.post(`/node-actions/refactor`, {
+        projectId,
+        graphSnapshotId: currGraphSnapshotId,
+        selectedNodeIds: risk.nodeIds,
+        prompt: `Fix risk: ${risk.title}. ${risk.description}`,
+      });
+
+      const actionData = res.data;
+      const nodeActionId = actionData.nodeActionId;
+
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await api.get(`/node-actions/${nodeActionId}`);
+          const statusData = statusRes.data;
+
+          if (statusData.status === "SUCCEEDED" || statusData.status === "FAILED") {
+            clearInterval(pollInterval);
+            setAnalysisStep("IDLE");
+            if (statusData.status === "FAILED") {
+              alert(`AI Fix failed: ${statusData.error || "Unknown error"}`);
+            } else {
+              const updatedRisksRes = await api.get(`/projects/${projectId}/risks`);
+              const updatedData = updatedRisksRes.data;
+              const riskList = Array.isArray(updatedData) ? updatedData : (updatedData.risks || []);
+              setRisks(riskList.map((r: any) => ({
                 id: r.id,
                 type: r.type,
                 severity: r.severity,
@@ -490,253 +577,147 @@ export default function RepoSortingPage({
               })));
             }
           }
-        }
-      } catch (e) {
-        console.error("Initial load failed", e);
-      }
-    };
-    initLoad();
-  }, [projectId]);
-
-  // --- API Integrations ---
-
-  const handleAnalyzeFn = async () => {
-    setIsAnalyzing(true);
-    setAnalysisStep("INGESTING");
-    try {
-      // 1. Ensure Repo Snapshot exists (Ingestion check)
-      let repoSnapshotId = null;
-      let graphSnapshotId = null;
-      let checkAttempts = 0;
-
-      while (!repoSnapshotId && checkAttempts < 20) {
-        // We check for graph first as it's the end goal
-        const res = await fetch(`http://localhost:3000/projects/${projectId}/graph`);
-        if (res.ok) {
-          const data = await res.json();
-          graphSnapshotId = data.graphSnapshotId;
-          setCurrGraphSnapshotId(graphSnapshotId);
-          // If graph exists, we don't need to check repo snapshot
-          if (graphSnapshotId) {
-            if (data.nodes) {
-              const laidOutNodes = data.nodes.map((n: any, i: number) => ({
-                ...n,
-                position: (n.position?.x === 0 && n.position?.y === 0)
-                  ? { x: (i % 6) * 280, y: Math.floor(i / 6) * 220 }
-                  : n.position
-              }));
-              setNodes(laidOutNodes);
-            }
-            if (data.edges) setEdges(data.edges);
-            break;
-          }
-        }
-
-        // If no graph, check if we at least have a repo snapshot to build from
-        // We don't have a direct endpoint for repo snapshot list usually, 
-        // but we can try the build endpoint and see if it gives a 404 or something else
-        // Actually, let's keep it simple: try to build. If 404, we are still ingesting.
-        const buildCheck = await fetch(`http://localhost:3000/projects/${projectId}/graph/build`, {
-          method: "POST",
-        });
-
-        if (buildCheck.ok) {
-          const buildData = await buildCheck.json();
-          repoSnapshotId = buildData.repoSnapshotId;
-          break;
-        }
-
-        if (buildCheck.status === 404) {
-          // Still ingesting...
-          console.log("Still ingesting or no snapshot yet...");
-          await new Promise(r => setTimeout(r, 3000));
-          checkAttempts++;
-          continue;
-        }
-
-        throw new Error("Failed to communicate with ingestion service");
-      }
-
-      if (!graphSnapshotId && !repoSnapshotId) {
-        throw new Error("Ingestion is taking longer than expected. Please try again in a moment.");
-      }
-
-      // 2. If we have a repo snapshot but still no graph, poll for graph build completion
-      if (!graphSnapshotId && repoSnapshotId) {
-        setAnalysisStep("BUILDING");
-        let buildAttempts = 0;
-        // Increase to 100 attempts (300 seconds) for larger repos
-        while (!graphSnapshotId && buildAttempts < 100) {
-          await new Promise(r => setTimeout(r, 3000));
-          const checkRes = await fetch(`http://localhost:3000/projects/${projectId}/graph`);
-          if (checkRes.ok) {
-            const checkData = await checkRes.json();
-            graphSnapshotId = checkData.graphSnapshotId;
-            setCurrGraphSnapshotId(graphSnapshotId);
-            if (checkData.nodes) {
-              // Apply simple grid layout to avoid (0,0) stacking
-              const laidOutNodes = checkData.nodes.map((n: any, i: number) => ({
-                ...n,
-                position: (n.position?.x === 0 && n.position?.y === 0)
-                  ? { x: (i % 6) * 280, y: Math.floor(i / 6) * 220 }
-                  : n.position
-              }));
-              setNodes(laidOutNodes);
-            }
-            if (checkData.edges) setEdges(checkData.edges);
-          }
-          buildAttempts++;
-        }
-      }
-
-      if (!graphSnapshotId) throw new Error("Graph building timed out.");
-
-      setAnalysisStep("ANALYZING");
-
-      // 3. Trigger Analysis
-      const analyzeRes = await fetch(`http://localhost:3000/projects/${projectId}/analyze`, {
-        method: "POST",
-      });
-      if (!analyzeRes.ok) throw new Error("Failed to start analysis");
-
-      // 4. Poll for Risks
-      const pollInterval = setInterval(async () => {
-        try {
-          const risksRes = await fetch(`http://localhost:3000/projects/${projectId}/risks`);
-          if (risksRes.ok) {
-            const data = await risksRes.json();
-            // Backend returns { graphSnapshotId, risks: [...] }
-            const riskList = Array.isArray(data) ? data : (data.risks || []);
-
-            if (data.graphSnapshotId) {
-              const mappedRisks: Risk[] = riskList.map((r: any) => ({
-                id: r.id,
-                type: r.type,
-                severity: r.severity,
-                title: r.title,
-                description: r.description,
-                ruleId: r.ruleId,
-                nodeIds: r.nodeIds || (r.nodes?.map((n: any) => n.nodeId)) || [],
-              }));
-
-              setRisks(mappedRisks);
-              setIsAnalyzing(false);
-              setAnalysisStep("IDLE");
-              setHasScanned(true);
-              clearInterval(pollInterval);
-            }
-          }
         } catch (e) {
           console.error("Polling error", e);
         }
       }, 3000);
 
-      // Stop polling after 120 seconds if no result
       setTimeout(() => {
         clearInterval(pollInterval);
-        setIsAnalyzing((prev) => {
-          if (prev) {
-            setAnalysisStep("IDLE");
-            return false;
-          }
-          return prev;
-        });
       }, 120000);
 
     } catch (err) {
       console.error(err);
-      setIsAnalyzing(false);
-      setAnalysisStep("IDLE");
-      alert(err instanceof Error ? err.message : "Failed to analyze repository.");
-    }
-  };
-
-  const handleFixRisk = async (risk: Risk) => {
-    if (!currGraphSnapshotId) return;
-
-    setIsAnalyzing(true);
-    setAnalysisStep("FIXING");
-
-    try {
-      const res = await fetch(`http://localhost:3000/node-actions/refactor`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId,
-          graphSnapshotId: currGraphSnapshotId,
-          selectedNodeIds: risk.nodeIds,
-          prompt: `Fix risk: ${risk.title}. ${risk.description}`,
-        }),
-      });
-
-      if (!res.ok) throw new Error("Failed to start AI fix");
-
-      const actionData = await res.json();
-      const nodeActionId = actionData.nodeActionId;
-
-      // Poll for completion
-      const pollInterval = setInterval(async () => {
-        const statusRes = await fetch(`http://localhost:3000/node-actions/${nodeActionId}`);
-        if (statusRes.ok) {
-          const statusData = await statusRes.json();
-          if (statusData.status === "SUCCEEDED" || statusData.status === "FAILED") {
-            clearInterval(pollInterval);
-            setIsAnalyzing(false);
-            setAnalysisStep("IDLE");
-            if (statusData.status === "FAILED") {
-              alert(`AI Fix failed: ${statusData.error || "Unknown error"}`);
-            } else {
-              // Refresh risks after fix
-              const updatedRisksRes = await fetch(`http://localhost:3000/projects/${projectId}/risks`);
-              if (updatedRisksRes.ok) {
-                const updatedData = await updatedRisksRes.json();
-                const riskList = Array.isArray(updatedData) ? updatedData : (updatedData.risks || []);
-                setRisks(riskList.map((r: any) => ({
-                  id: r.id,
-                  type: r.type,
-                  severity: r.severity,
-                  title: r.title,
-                  description: r.description,
-                  ruleId: r.ruleId,
-                  nodeIds: r.nodeIds || (r.nodes?.map((n: any) => n.nodeId)) || [],
-                })));
-              }
-            }
-          }
-        }
-      }, 3000);
-
-    } catch (err) {
-      console.error(err);
-      setIsAnalyzing(false);
       setAnalysisStep("IDLE");
       alert("Failed to trigger AI fix.");
     }
   };
 
+  const handleExplainNode = async (nodeId: string) => {
+    const node = nodes.find(n => n.id === nodeId);
+    if (!node) return;
+
+    setIsExplaining(true);
+    try {
+      // Use specialized Explain Module
+      const res = await api.post('/explain', { projectId, nodeId });
+      const explanation = res.data.description;
+
+      setNodeMeta(prev => ({
+        ...prev,
+        [nodeId]: {
+          ...prev[nodeId],
+          description: explanation
+        }
+      }));
+
+    } catch (e) {
+      console.error("Failed to explain node", e);
+      alert("Failed to generate explanation.");
+    } finally {
+      setIsExplaining(false);
+    }
+  };
+
+  const handleRefactor = async (nodeId: string, prompt: string, type: 'REFACTOR' | 'HARDEN' | 'ADD_TESTS') => {
+    try {
+      const actionMap = {
+        'REFACTOR': nodeActions.refactor,
+        'HARDEN': nodeActions.harden,
+        'ADD_TESTS': nodeActions.addTests
+      };
+      const apiCall = actionMap[type];
+      if (!apiCall) return;
+
+      alert(`AI Engineer dispatched! \nTask: ${type}\nTarget: ${nodeId}\n\nCheck back soon for results.`);
+
+      const res = await apiCall({
+        projectId,
+        graphSnapshotId: currGraphSnapshotId,
+        selectedNodeIds: [nodeId],
+        prompt: prompt,
+        autoApply: true
+      });
+
+      if (res.data.queued) {
+        console.log("Action queued:", res.data);
+      }
+
+    } catch (e: any) {
+      console.error("Refactor failed", e);
+      alert(`Failed to start refactoring: ${e.response?.data?.message || e.message}`);
+    }
+  };
+
+
   const runAgentCommand = async (input: string) => {
     const text = input.trim();
     if (!text) return;
 
-    // 1. Add user message
     setChatMessages(prev => [...prev, { role: 'user', text }]);
+
+    // Command Parsing
+    if (text.startsWith('/')) {
+      const [cmd, ...args] = text.split(' ');
+      const targetName = args.join(' ');
+
+      if (cmd === '/refactor' || cmd === '/harden' || cmd === '/test') {
+        if (!targetName) {
+          setChatMessages(prev => [...prev, { role: 'agent', text: "Please specify a target node. Usage: /refactor <NodeName>" }]);
+          return;
+        }
+
+        // Fuzzy find node
+        const targetNode = nodes.find(n => n.data.label.toLowerCase().includes(targetName.toLowerCase()));
+
+        if (targetNode) {
+          const actionType = cmd === '/harden' ? 'HARDEN' : cmd === '/test' ? 'ADD_TESTS' : 'REFACTOR';
+          const actionVerb = cmd === '/harden' ? 'Hardening' : cmd === '/test' ? 'Adding tests for' : 'Refactoring';
+
+          setChatMessages(prev => [...prev, { role: 'agent', text: `Found target: [${targetNode.data.label}]. ${actionVerb}...` }]);
+
+          // Set Visual State
+          setActiveActionNodeIds(prev => new Set(prev).add(targetNode.id));
+
+          // Trigger Action
+          try {
+            await handleRefactor(targetNode.id, `Agent command: ${text}`, actionType);
+            setChatMessages(prev => [...prev, { role: 'agent', text: `✅ Action queued for ${targetNode.data.label}. Monitor graph for updates.` }]);
+          } catch (e) {
+            setChatMessages(prev => [...prev, { role: 'agent', text: `❌ Failed to execute action on ${targetNode.data.label}.` }]);
+            setActiveActionNodeIds(prev => {
+              const next = new Set(prev);
+              next.delete(targetNode.id);
+              return next;
+            });
+          }
+
+          // Note: We leave it in "active" state to show work is in progress. 
+          // Ideally, polling system removes it when done. For now, we clear it after 10s for demo effect if no real polling.
+          setTimeout(() => {
+            setActiveActionNodeIds(prev => {
+              const next = new Set(prev);
+              next.delete(targetNode.id);
+              return next;
+            });
+          }, 15000); // 15s visual feedback
+
+          return;
+        } else {
+          setChatMessages(prev => [...prev, { role: 'agent', text: `Could not find any node matching "${targetName}".` }]);
+          return;
+        }
+      }
+    }
+
     setIsAgentThinking(true);
 
     try {
-      // 2. Call backend
-      const res = await fetch('http://localhost:3000/agent/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId, prompt: text }),
-      });
+      const res = await api.post('/agent/chat', { projectId, prompt: text });
+      const data = res.data;
 
-      if (!res.ok) throw new Error("Agent connection failed");
-      const data = await res.json();
-
-      // 3. Add agent response
       setChatMessages(prev => [...prev, { role: 'agent', text: data.message }]);
 
-      // 4. Run actions
       if (data.actions && data.actions.length > 0) {
         beginBatch();
         data.actions.forEach((action: any) => applyAction(action));
@@ -750,7 +731,6 @@ export default function RepoSortingPage({
     }
   };
 
-  // --- Gemini JSON Action Executor ---
   type AgentAction =
     | { type: "addNode"; id: string; label?: string }
     | { type: "connect"; from: string; to: string }
@@ -770,7 +750,7 @@ export default function RepoSortingPage({
         connectNodes(action.from, action.to);
         break;
       case "expand":
-        if (SUBGRAPHS[action.id] && !expandedRef.current[action.id]) {
+        if (subgraphsRef.current[action.id] && !expandedRef.current[action.id]) {
           expandSubgraph(action.id);
           setExpanded((prev) => {
             const next = { ...prev, [action.id]: true };
@@ -780,7 +760,7 @@ export default function RepoSortingPage({
         }
         break;
       case "collapse":
-        if (SUBGRAPHS[action.id] && expandedRef.current[action.id]) {
+        if (subgraphsRef.current[action.id] && expandedRef.current[action.id]) {
           collapseSubgraph(action.id);
           setExpanded((prev) => {
             const next = { ...prev, [action.id]: false };
@@ -824,51 +804,22 @@ export default function RepoSortingPage({
     }
   };
 
-  const runAgentActionsFromJSON = (json: unknown) => {
-    if (!json || typeof json !== "object") return;
-    const payload = json as { actions?: AgentAction[] };
-    if (!Array.isArray(payload.actions)) return;
-
-    beginBatch();
-
-    payload.actions.forEach((action) => {
-      applyAction(action);
-    });
-
-    endBatch();
-  };
-
-  // Example Gemini response:
-  // {
-  //   "actions": [
-  //     { "type": "addNode", "id": "frontend" },
-  //     { "type": "addNode", "id": "backend" },
-  //     { "type": "connect", "from": "frontend", "to": "backend" },
-  //     { "type": "expand", "id": "frontend" }
-  //   ]
-  // }
-  //
-  // runAgentActionsFromJSON(geminiResponse);
-
+  const isAnalyzing = projectStatus === ProjectStatus.INGESTING || projectStatus === ProjectStatus.ANALYZING; // Computed
   const hasGraphData = nodes.length > 0;
 
   return (
     <main className="min-h-screen bg-[#B3BAC9]">
       <Navbar showGetStarted={false} />
 
-      {/* Brutalist Analysis Trigger Popup */}
       {!isAnalyzing && !hasScanned && nodes.length === 0 && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/20 backdrop-blur-sm pointer-events-none p-6">
           <div className="pointer-events-auto animate-in fade-in zoom-in-95 duration-500 max-w-md w-full">
             <div className="relative transform -rotate-1">
-              {/* Hard Shadow Background Layer */}
               <div className="absolute inset-0 bg-black rounded-3xl translate-x-3 translate-y-3" />
-
               <div className="relative bg-[#E6E6E6] border-4 border-black p-10 rounded-3xl flex flex-col items-center gap-10 text-center">
                 <div className="w-24 h-24 bg-white border-4 border-black rounded-2xl flex items-center justify-center shadow-[6px_6px_0px_rgba(0,0,0,1)] -rotate-3">
                   <span className="text-5xl">✨</span>
                 </div>
-
                 <div className="space-y-4">
                   <h2 className="text-5xl font-black text-black font-epilogue tracking-tighter uppercase leading-tight">
                     AI AGENT <br /> READY
@@ -877,7 +828,6 @@ export default function RepoSortingPage({
                     Map dependencies and surface mission-critical risks in seconds.
                   </p>
                 </div>
-
                 <button
                   onClick={handleAnalyzeFn}
                   className="w-full bg-red-500 text-white font-bold text-2xl py-6 rounded-2xl border-4 border-black shadow-[8px_8px_0px_rgba(0,0,0,1)] hover:translate-x-1 hover:translate-y-1 hover:shadow-[4px_4px_0px_rgba(0,0,0,1)] transition-all duration-200 uppercase font-pixelify tracking-wider"
@@ -897,7 +847,6 @@ export default function RepoSortingPage({
       />
 
       <div className="relative w-full h-[calc(100vh-80px)] overflow-hidden bg-[#F8F9FB]">
-        {/* Subtle grid pattern */}
         <div className="absolute inset-0" style={{
           backgroundImage: "radial-gradient(#E2E8F0 1.5px, transparent 1.5px)",
           backgroundSize: "32px 32px"
@@ -914,8 +863,8 @@ export default function RepoSortingPage({
               onNodeClick={(_, node) => {
                 const id = node.id;
                 setSelectedNodeId(id);
-
-                if (SUBGRAPHS[id]) {
+                // Check if we have children to expand
+                if (subgraphsRef.current[id] && subgraphsRef.current[id].length > 0) {
                   expanded[id] ? collapseSubgraph(id) : expandSubgraph(id);
                   toggleExpand(id);
                 }
@@ -936,17 +885,13 @@ export default function RepoSortingPage({
             </ReactFlow>
           </div>
         </div>
-        {/* Brutalist Loading Overlay */}
+
         {isAnalyzing && (
           <div className="absolute inset-0 z-40 bg-[#B3BAC9]/90 backdrop-blur-md flex flex-col items-center justify-center animate-in fade-in duration-500">
-
             <div className="max-w-md w-full px-6">
               <div className="relative">
-                {/* Shadow */}
                 <div className="absolute inset-0 bg-black rounded-3xl translate-x-2 translate-y-2" />
-
                 <div className="relative bg-white border-4 border-black p-12 rounded-3xl flex flex-col items-center gap-10">
-                  {/* Industrial Spinner */}
                   <div className="relative">
                     <div className="w-24 h-24 rounded-full border-8 border-black/10" />
                     <div className="absolute inset-0 w-24 h-24 rounded-full border-8 border-t-red-500 animate-spin" />
@@ -956,7 +901,6 @@ export default function RepoSortingPage({
                       </span>
                     </div>
                   </div>
-
                   <div className="text-center space-y-3">
                     <h3 className="text-4xl font-black text-black font-epilogue tracking-tighter uppercase italic">
                       {analysisStep === "INGESTING" ? "INGESTING" :
@@ -968,15 +912,12 @@ export default function RepoSortingPage({
                           "Risk Detection"}
                     </p>
                   </div>
-
-                  {/* Industrial Progress Indicator */}
                   <div className="w-full flex items-center justify-between gap-2 px-4">
                     {[1, 2, 3].map((step) => {
                       const steps = ["INGESTING", "BUILDING", "ANALYZING"];
                       const isActive = analysisStep === steps[step - 1];
                       const idx = steps.indexOf(analysisStep);
                       const isDone = idx > step - 1;
-
                       return (
                         <React.Fragment key={step}>
                           <div className="flex flex-col items-center gap-2">
@@ -992,12 +933,9 @@ export default function RepoSortingPage({
                 </div>
               </div>
             </div>
-
-            <div className="mt-12">
-              <span className="font-pixelify text-black animate-pulse uppercase tracking-[0.2em]">Executing Agent Pipeline...</span>
-            </div>
           </div>
         )}
+
         {showChat && (
           <div className="absolute bottom-20 left-6 w-[450px] h-[600px] bg-[#0B0A0C] border-4 border-black shadow-[10px_10px_0px_rgba(239,68,68,1)] flex flex-col z-50 rounded-none overflow-hidden">
             <div className="flex items-center justify-between p-5 bg-[#0B0A0C] border-b-4 border-black text-white text-xs font-black font-pixelify uppercase tracking-widest">
@@ -1013,7 +951,6 @@ export default function RepoSortingPage({
               </button>
             </div>
             <div className="flex-1 p-6 space-y-4 text-sm text-green-400 overflow-y-auto font-mono bg-[#0B0A0C]">
-              <div className="text-white/20 mb-6 font-pixelify uppercase text-[10px]">SYSTEM INITIALIZED (v4.2.1)</div>
               {chatMessages.map((m, i) => (
                 <div key={i} className={`flex flex-col ${m.role === 'agent' ? 'items-start' : 'items-end'}`}>
                   <div className={`p-4 rounded-none border-2 ${m.role === 'agent' ? 'border-green-500/30 bg-green-500/5' : 'border-red-500/30 bg-red-500/5'} max-w-[90%]`}>
@@ -1065,23 +1002,11 @@ export default function RepoSortingPage({
                 [id]: { ...prev[id], ...updates },
               }));
             }}
-            onFix={(id) => {
-              const node = nodes.find(n => n.id === id);
-              if (node) {
-                handleFixRisk({
-                  id: `manual-${id}`,
-                  title: `Manual Refactor: ${node.data.label}`,
-                  description: nodeMeta[id]?.description || "Requested manual refactor via inspector.",
-                  severity: "MEDIUM",
-                  type: "REFACTOR",
-                  nodeIds: [id],
-                  ruleId: "manual-refactor"
-                });
-              }
-            }}
+            onExplain={handleExplainNode}
+            isExplaining={isExplaining}
           />
         )}
       </div>
-    </main >
+    </main>
   );
 }

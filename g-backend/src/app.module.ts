@@ -25,6 +25,8 @@ import { GovernanceModule } from './modules/governance/governance.module';
 import { ArtifactsModule } from './modules/artifacts/artifacts.module';
 import { LlmModule } from './llm/llm.module';
 import { AgentModule } from './modules/agent/agent.module';
+import { NodeModule } from './modules/node/node.module';
+import { ExplainModule } from './modules/explain/explain.module';
 
 @Module({
   imports: [
@@ -47,6 +49,7 @@ import { AgentModule } from './modules/agent/agent.module';
     ArtifactsModule,
     LlmModule,
     AgentModule,
+    ExplainModule,
   ],
   controllers: [AppController],
   providers: [AppService],

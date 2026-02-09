@@ -3,18 +3,21 @@ import { ArrayMinSize, IsArray, IsOptional, IsString, IsUUID } from 'class-valid
 
 export class CreateNodeActionDto {
   @IsUUID()
-  projectId: string;
+  projectId!: string;
 
   @IsUUID()
-  graphSnapshotId: string;
+  graphSnapshotId!: string;
 
   @IsArray()
   @ArrayMinSize(1)
   @IsUUID('4', { each: true })
   @Type(() => String)
-  selectedNodeIds: string[];
+  selectedNodeIds!: string[];
 
   @IsOptional()
   @IsString()
   prompt?: string;
+
+  @IsOptional()
+  autoApply?: boolean;
 }

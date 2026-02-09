@@ -9,8 +9,10 @@ import { ApprovalService } from '../governance/approval.service';
 import { AuditService } from '../governance/audit.service';
 import { Roles } from '../governance/roles.decorator';
 
+import { BaseController } from '../../common/controllers/base.controller';
+
 @Controller('node-actions')
-export class NodeActionController {
+export class NodeActionController extends BaseController {
   private readonly logger = new Logger(NodeActionController.name);
 
   constructor(
@@ -19,12 +21,24 @@ export class NodeActionController {
     private readonly approvals: ApprovalService,
     private readonly audit: AuditService,
     @Inject(QUEUE_REGISTRY) private readonly queues: any,
-  ) {}
+  ) { super(); }
 
   @Post('refactor')
   @Roles('developer', 'admin')
   async refactor(@Body() dto: CreateNodeActionDto, @Req() req: Request) {
     return this.startAction('REFACTOR', dto, req);
+  }
+
+  @Post('optimize')
+  @Roles('developer', 'admin')
+  async optimize(@Body() dto: CreateNodeActionDto, @Req() req: Request) {
+    return this.startAction('OPTIMIZE', dto, req);
+  }
+
+  @Post('rename')
+  @Roles('developer', 'admin')
+  async rename(@Body() dto: CreateNodeActionDto, @Req() req: Request) {
+    return this.startAction('RENAME', dto, req);
   }
 
   @Post('harden')
@@ -39,14 +53,29 @@ export class NodeActionController {
     return this.startAction('ADD_TESTS', dto, req);
   }
 
+  @Post(':id/execute')
+  @Roles('developer', 'admin')
+  async execute(@Param('id') id: string, @Req() req: Request) {
+    const traceId = this.getTraceId(req);
+    const res = await this.actions.executeAction(id, traceId);
+
+    // Enqueue the APPLY_PLAN job manually
+    await this.queues.apply.add(QUEUE_NAMES.APPLY_PLAN, {
+      runId: res.runId,
+      traceId,
+    });
+
+    return { nodeActionId: id, runId: res.runId, queued: true };
+  }
+
   @Get(':id')
   async get(@Param('id') id: string) {
     return this.actions.getAction(id);
   }
 
-  private async startAction(type: 'REFACTOR' | 'HARDEN' | 'ADD_TESTS', dto: CreateNodeActionDto, req: Request) {
-    const traceId = (req as any).traceId;
-    const actorRole = (req as any).actorRole ?? 'developer';
+  private async startAction(type: 'REFACTOR' | 'HARDEN' | 'ADD_TESTS' | 'OPTIMIZE' | 'RENAME', dto: CreateNodeActionDto, req: Request) {
+    const traceId = this.getTraceId(req);
+    const actorRole = this.getActorRole(req);
 
     const { nodeActionId, planId, repoSnapshotId } = await this.actions.createAction({
       type,
@@ -55,11 +84,12 @@ export class NodeActionController {
       selectedNodeIds: dto.selectedNodeIds,
       prompt: dto.prompt,
       traceId,
+      autoApply: dto.autoApply ?? true,
     });
 
     const targetNodePaths = await this.actions.getNodePaths(dto.graphSnapshotId, dto.selectedNodeIds);
     const decision = this.policy.evaluateAction({
-      actionType: type,
+      actionType: type === 'REFACTOR' || type === 'OPTIMIZE' || type === 'RENAME' ? 'REFACTOR' : type,
       projectId: dto.projectId,
       nodeIds: dto.selectedNodeIds,
       prompt: dto.prompt,

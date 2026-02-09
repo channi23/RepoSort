@@ -40,15 +40,18 @@ export class GeminiService {
     return enabled;
   }
 
-  async generateText(systemPrompt: string, userPrompt: string, timeoutMs = 30_000): Promise<string | null> {
+  async generateText(systemPrompt: string, userPrompt: string, timeoutMs = 30_000): Promise<string> {
     const cfg = getGeminiConfig();
-    if (!this.isEnabled() || !cfg.apiKey) return null;
+    if (!this.isEnabled() || !cfg.apiKey) {
+      throw new Error('Gemini is not configured');
+    }
+
+    const model = this.normalizeModel(cfg.model);
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(cfg.apiKey)}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const model = this.normalizeModel(cfg.model);
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(cfg.apiKey)}`;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -67,33 +70,33 @@ export class GeminiService {
           generationConfig: { temperature: 0.2 },
         }),
       }).finally(() => clearTimeout(timeout));
+
       if (!response.ok) {
         let details = '';
         try {
-          const bodyText = (await response.text())?.slice(0, 500);
-          details = bodyText ? ` body=${bodyText}` : '';
-        } catch {
-          // ignore
-        }
-        this.logger.warn(`Gemini API request failed status=${response.status}${details}`);
-        return null;
+          details = (await response.text())?.slice(0, 200) || '';
+        } catch { /* ignore */ }
+        this.logger.warn(`Gemini API request failed status=${response.status} body=${details}`);
+        throw new Error(`Gemini API error (${response.status}): ${details}`);
       }
 
       const json = await response.json();
       const text = String(json?.candidates?.[0]?.content?.parts?.[0]?.text ?? '').trim();
-      if (!text) return null;
-
+      if (!text) {
+        throw new Error('Gemini returned empty content');
+      }
       return text;
     } catch (error: any) {
+      if (error.name === 'AbortError') {
+        throw new Error(`Gemini request timed out after ${timeoutMs}ms`);
+      }
       this.logger.warn(`Gemini text generation failed: ${error?.message ?? error}`);
-      return null;
+      throw error;
     }
   }
 
-  async generateJson<T>(systemPrompt: string, userPrompt: string, timeoutMs = 30_000): Promise<T | null> {
+  async generateJson<T>(systemPrompt: string, userPrompt: string, timeoutMs = 30_000): Promise<T> {
     const text = await this.generateText(systemPrompt, userPrompt, timeoutMs);
-    if (!text) return null;
-
     try {
       const normalized = text.startsWith('```')
         ? text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim()
@@ -101,7 +104,7 @@ export class GeminiService {
       return JSON.parse(normalized) as T;
     } catch (error: any) {
       this.logger.warn(`Gemini JSON parse failed: ${error?.message ?? error}`);
-      return null;
+      throw new Error(`Failed to parse Gemini JSON: ${error.message}`);
     }
   }
 }
